@@ -1,0 +1,15 @@
+DOMAIN = "btechnics_vto"
+CONF_DOORS = "doors"
+CONF_HOST = "host"
+CONF_HTTPS = "https"
+CONF_USERNAME = "username"
+CONF_PASSWORD = "password"
+STORAGE_KEY = f"{DOMAIN}_registry"
+STORAGE_VERSION = 1
+EVENT_UNLOCK = f"{DOMAIN}_unlock"
+LOG_INTERVAL = 30
+CODES_INTERVAL = 300
+TABLE_CODES = "AccessControlCommonPassword"
+TABLE_CARDS = "AccessControlCard"
+TABLE_LOG = "AccessControlCardRec"
+METHODS = {0: "code", 1: "badge", 2: "vingerafdruk", 3: "gezicht", 4: "app", 5: "knop", 6: "VTH"}

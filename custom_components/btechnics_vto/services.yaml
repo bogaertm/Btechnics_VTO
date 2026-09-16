@@ -1,0 +1,52 @@
+add_code:
+  name: Code toevoegen
+  description: Voegt een nieuwe toegangscode toe op een of meerdere deuren.
+  fields:
+    name:
+      name: Naam
+      required: true
+      example: "Jan Peeters"
+      selector: { text: {} }
+    code:
+      name: Code
+      description: 4 tot 8 cijfers
+      required: true
+      example: "123456"
+      selector: { text: {} }
+    doors:
+      name: Deuren
+      description: Lijst van deurnamen of ids
+      required: true
+      example: '["Café", "Kammerstraat"]'
+      selector: { object: {} }
+update_code:
+  name: Code wijzigen
+  description: Wijzigt een code die via deze integratie is aangemaakt. Bestaande codes zijn vergrendeld.
+  fields:
+    id:
+      name: Id
+      required: true
+      selector: { text: {} }
+    name:
+      name: Naam
+      selector: { text: {} }
+    code:
+      name: Code
+      selector: { text: {} }
+    doors:
+      name: Deuren
+      selector: { object: {} }
+remove_code:
+  name: Code verwijderen
+  description: Verwijdert een code die via deze integratie is aangemaakt. Bestaande codes kunnen niet verwijderd worden.
+  fields:
+    id:
+      name: Id
+      required: true
+      selector: { text: {} }
+refresh:
+  name: Opnieuw uitlezen
+  description: Leest codes, badges en logboek opnieuw uit op alle deuren.
+list_codes:
+  name: Codes opvragen
+  description: Geeft alle codes per deur terug, met aanduiding welke via de integratie beheerd worden.
