@@ -3,13 +3,24 @@
     "step": {
       "user": {
         "title": "VTO toevoegen",
-        "data": {"name": "Naam deur", "host": "IP adres", "https": "HTTPS gebruiken", "username": "Gebruiker", "password": "Wachtwoord"}
+        "data": {
+          "name": "Naam deur",
+          "host": "IP adres",
+          "https": "HTTPS gebruiken",
+          "username": "Gebruiker",
+          "password": "Wachtwoord"
+        },
+        "description": "{reason}"
       },
       "more": {
         "title": "Toegevoegd: {doors}",
-        "data": {"add_another": "Nog een deur toevoegen"}
+        "data": {
+          "add_another": "Nog een deur toevoegen"
+        }
       }
     },
-    "error": {"cannot_connect": "Kan niet inloggen op de VTO. Controleer IP, HTTPS en wachtwoord."}
+    "error": {
+      "cannot_connect": "Kan niet inloggen op de VTO. Controleer IP, HTTPS en wachtwoord. Reden staat hieronder."
+    }
   }
 }

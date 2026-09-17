@@ -36,19 +36,24 @@ class BtechnicsVTOConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
     async def async_step_user(self, user_input=None):
         errors = {}
+        placeholders = {"reason": ""}
         if user_input is not None:
             client = VTOClient(user_input[CONF_HOST], user_input[CONF_HTTPS], user_input[CONF_USERNAME], user_input[CONF_PASSWORD])
             try:
                 info = await self.hass.async_add_executor_job(_test, client)
-            except (VTOError, OSError):
+            except Exception as e:  # noqa: BLE001
                 errors["base"] = "cannot_connect"
+                placeholders["reason"] = f"{type(e).__name__}: {e}"[:300]
             else:
                 d = dict(user_input)
                 d["id"] = _door_id(user_input["name"])
                 d["info"] = info
                 self._doors.append(d)
                 return await self.async_step_more()
-        return self.async_show_form(step_id="user", data_schema=DOOR_SCHEMA, errors=errors)
+        schema = DOOR_SCHEMA
+        if user_input is not None:
+            schema = self.add_suggested_values_to_schema(DOOR_SCHEMA, user_input)
+        return self.async_show_form(step_id="user", data_schema=schema, errors=errors, description_placeholders=placeholders)
 
     async def async_step_more(self, user_input=None):
         if user_input is not None:
