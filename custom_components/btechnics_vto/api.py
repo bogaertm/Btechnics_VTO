@@ -10,9 +10,22 @@ import urllib.request
 
 from .const import TABLE_CARDS, TABLE_CODES, TABLE_LOG
 
-CTX = ssl.create_default_context()
-CTX.check_hostname = False
-CTX.verify_mode = ssl.CERT_NONE
+def _make_ctx():
+    """Dahua VTO's spreken TLS 1.2 met RSA key exchange (AES256-GCM-SHA384) en een
+    zelfgetekend certificaat. Moderne OpenSSL weigert dat standaard, vandaar
+    een eigen context: geen verificatie, ruime ciphers, security level 0."""
+    ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+    ctx.check_hostname = False
+    ctx.verify_mode = ssl.CERT_NONE
+    ctx.minimum_version = ssl.TLSVersion.TLSv1
+    try:
+        ctx.set_ciphers("ALL:@SECLEVEL=0")
+    except ssl.SSLError:
+        ctx.set_ciphers("DEFAULT")
+    return ctx
+
+
+CTX = _make_ctx()
 
 
 def _md5(s: str) -> str:
