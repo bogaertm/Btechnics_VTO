@@ -48,6 +48,7 @@ def _get(hass, entry_id):
 
 
 def _all_coords(hass):
+    # Coordinators van ALLE config entries samen, niet enkel de eerst-geladen entry.
     coords = {}
     for d in hass.data.get(DOMAIN, {}).values():
         coords.update(d["coords"])
@@ -71,7 +72,8 @@ def _register_services(hass: HomeAssistant, entry_id: str):
         return
 
     async def add_code(call: ServiceCall):
-        coords, reg = _get(hass, entry_id)
+        coords = _all_coords(hass)
+        reg = _get(hass, entry_id)[1]
         name, code = call.data["name"].strip(), call.data["code"]
         door_ids = _door_ids(coords, call.data["doors"])
         # dubbelcheck op alle gekozen deuren vóór er iets geschreven wordt
@@ -94,7 +96,8 @@ def _register_services(hass: HomeAssistant, entry_id: str):
         return {"id": cid, "doors": doors}
 
     async def update_code(call: ServiceCall):
-        coords, reg = _get(hass, entry_id)
+        coords = _all_coords(hass)
+        reg = _get(hass, entry_id)[1]
         cid = call.data["id"]
         if cid not in reg.managed:
             raise HomeAssistantError("onbekende id: enkel codes die via de integratie zijn aangemaakt kunnen gewijzigd worden")
@@ -122,7 +125,8 @@ def _register_services(hass: HomeAssistant, entry_id: str):
         return {"id": cid, "doors": doors}
 
     async def remove_code(call: ServiceCall):
-        coords, reg = _get(hass, entry_id)
+        coords = _all_coords(hass)
+        reg = _get(hass, entry_id)[1]
         cid = call.data["id"]
         if cid not in reg.managed:
             raise HomeAssistantError("onbekende id: bestaande codes kunnen niet verwijderd worden")
@@ -137,12 +141,13 @@ def _register_services(hass: HomeAssistant, entry_id: str):
             await coords[did].async_refresh_codes()
 
     async def refresh(call: ServiceCall):
-        coords, _ = _get(hass, entry_id)
+        coords = _all_coords(hass)
         for c in coords.values():
             await c.async_refresh_codes()
 
     async def list_codes(call: ServiceCall):
-        coords, reg = _get(hass, entry_id)
+        coords = _all_coords(hass)
+        reg = _get(hass, entry_id)[1]
         rows = {}
         for did, c in coords.items():
             for r in c.codes:
