@@ -3,6 +3,7 @@ import logging
 from datetime import datetime, timedelta
 
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
 from .api import VTOClient, VTOError
@@ -23,6 +24,7 @@ class DoorCoordinator(DataUpdateCoordinator):
         self.last_unlock = None
         self._last_codes_fetch = None
         self._seen_recnos = None
+        self._entity_id = None
 
     def _run(self, fn, *a):
         """Sync API-aanroep in executor, met login per beurt (VTO houdt sessies kort)."""
@@ -69,8 +71,31 @@ class DoorCoordinator(DataUpdateCoordinator):
             self._seen_recnos.add(r["RecNo"])
             self.last_unlock = self._fmt(r)
             self.hass.bus.async_fire(EVENT_UNLOCK, self.last_unlock)
+            self._log_to_logbook(self.last_unlock)
         if len(self._seen_recnos) > 2000:
             self._seen_recnos = {r["RecNo"] for r in recs}
+
+    def _log_to_logbook(self, unlock):
+        """Schrijft een echte logboekregel (via logbook.log), zodat deze filterbaar is per deur/sensor
+        in het Home Assistant Logboek en in een Logboek-kaart op het dashboard."""
+        if self._entity_id is None:
+            registry = er.async_get(self.hass)
+            self._entity_id = registry.async_get_entity_id("sensor", DOMAIN, f"{self.door_id}_last_unlock") or False
+        if not self._entity_id:
+            return
+        status = "geopend" if unlock["opened"] else "geweigerd"
+        self.hass.async_create_task(
+            self.hass.services.async_call(
+                "logbook", "log",
+                {
+                    "name": f"VTO {unlock['door']}",
+                    "message": f"{unlock['name']} via {unlock['method']} ({status})",
+                    "entity_id": self._entity_id,
+                    "domain": DOMAIN,
+                },
+                blocking=False,
+            )
+        )
 
     def _fmt(self, r):
         return {
