@@ -1,5 +1,6 @@
 """Btechnics VTO: centraal codebeheer en logboek voor Dahua VTO's."""
 import logging
+from datetime import datetime
 
 import voluptuous as vol
 from homeassistant.config_entries import ConfigEntry
@@ -8,7 +9,7 @@ from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import config_validation as cv
 
 from .api import VTOClient, VTOError
-from .const import CONF_DOORS, CONF_HOST, CONF_HTTPS, CONF_PASSWORD, CONF_USERNAME, DOMAIN
+from .const import CONF_DOORS, CONF_HOST, CONF_HTTPS, CONF_PASSWORD, CONF_USERNAME, DOMAIN, METHODS
 from .coordinator import DoorCoordinator
 from .registry import CodeRegistry
 
@@ -26,7 +27,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         client = VTOClient(door[CONF_HOST], door[CONF_HTTPS], door[CONF_USERNAME], door[CONF_PASSWORD])
         c = DoorCoordinator(hass, door["id"], door["name"], client)
         await c.async_config_entry_first_refresh()
-        # eerste keer: alle bestaande codes van deze deur vergrendelen
+        # eerste keer: alle bestaande codes vergrendelen
         await reg.snapshot_protected(door["id"], [r["RecNo"] for r in c.codes])
         coords[door["id"]] = c
     hass.data.setdefault(DOMAIN, {})[entry.entry_id] = {"coords": coords, "registry": reg}
@@ -44,6 +45,13 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 def _get(hass, entry_id):
     d = hass.data[DOMAIN][entry_id]
     return d["coords"], d["registry"]
+
+
+def _all_coords(hass):
+    coords = {}
+    for d in hass.data.get(DOMAIN, {}).values():
+        coords.update(d["coords"])
+    return coords
 
 
 def _door_ids(coords, doors):
@@ -95,25 +103,19 @@ def _register_services(hass: HomeAssistant, entry_id: str):
         code = call.data.get("code", m["code"])
         want = set(_door_ids(coords, call.data["doors"])) if "doors" in call.data else set(m["doors"])
         doors = dict(m["doors"])
-        # bestaande deuren: update; weggehaalde deuren: remove; nieuwe deuren: insert. Altijd met vergrendelingscheck.
+        # bestaande deuren: update; verwijderde deuren: remove; nieuwe deuren: insert. Altijd met vergrendelingscheck.
         for did, recno in list(doors.items()):
             c = coords[did]
             if not reg.may_write(did, recno):
                 raise HomeAssistantError(f"{c.door_name}: RecNo {recno} is beschermd")
-            try:
-                if did in want:
-                    await hass.async_add_executor_job(c._run, c.client.update_code, recno, name, code)
-                else:
-                    await hass.async_add_executor_job(c._run, c.client.remove_code, recno)
-                    doors.pop(did)
-            except (VTOError, OSError) as e:
-                raise HomeAssistantError(f"{c.door_name}: {e}") from e
+            if did in want:
+                await hass.async_add_executor_job(c._run, c.client.update_code, recno, name, code)
+            else:
+                await hass.async_add_executor_job(c._run, c.client.remove_code, recno)
+                doors.pop(did)
         for did in want - set(doors):
             c = coords[did]
-            try:
-                doors[did] = await hass.async_add_executor_job(c._run, c.client.add_code, name, code)
-            except (VTOError, OSError) as e:
-                raise HomeAssistantError(f"{c.door_name}: {e}") from e
+            doors[did] = await hass.async_add_executor_job(c._run, c.client.add_code, name, code)
         await reg.update(cid, name, code, doors)
         for did in set(want) | set(m["doors"]):
             await coords[did].async_refresh_codes()
@@ -129,10 +131,7 @@ def _register_services(hass: HomeAssistant, entry_id: str):
             c = coords[did]
             if not reg.may_write(did, recno):
                 raise HomeAssistantError(f"{c.door_name}: RecNo {recno} is beschermd")
-            try:
-                await hass.async_add_executor_job(c._run, c.client.remove_code, recno)
-            except (VTOError, OSError) as e:
-                raise HomeAssistantError(f"{c.door_name}: {e}") from e
+            await hass.async_add_executor_job(c._run, c.client.remove_code, recno)
         await reg.remove(cid)
         for did in m["doors"]:
             await coords[did].async_refresh_codes()
@@ -156,6 +155,28 @@ def _register_services(hass: HomeAssistant, entry_id: str):
                 row["managed"], row["id"] = True, cid
         return {"codes": sorted(rows.values(), key=lambda x: x["name"].lower()), "registry": reg.export()}
 
+    async def list_log(call: ServiceCall):
+        # Werkt over alle deuren/config entries heen, ongeacht welke entry als eerste laadde.
+        coords = _all_coords(hass)
+        count = call.data.get("count", 100)
+        log = []
+        for c in coords.values():
+            try:
+                recs = await hass.async_add_executor_job(c._run, c.client.unlocks, count)
+            except (VTOError, OSError) as e:
+                raise HomeAssistantError(f"{c.door_name}: {e}") from e
+            for r in recs:
+                log.append({
+                    "tijd": datetime.fromtimestamp(r.get("CreateTime", 0)).isoformat(timespec="seconds"),
+                    "deur": c.door_name,
+                    "naam": r.get("CardName") or r.get("UserID") or "?",
+                    "methode": METHODS.get(r.get("Method"), str(r.get("Method"))),
+                    "geopend": r.get("Status") == 1,
+                    "kaart": r.get("CardNo", ""),
+                })
+        log.sort(key=lambda x: x["tijd"], reverse=True)
+        return {"log": log}
+
     hass.services.async_register(DOMAIN, "add_code", add_code, vol.Schema({
         vol.Required("name"): cv.string, vol.Required("code"): CODE_SCHEMA,
         vol.Required("doors"): vol.All(cv.ensure_list, [cv.string])}), supports_response=SupportsResponse.OPTIONAL)
@@ -165,3 +186,5 @@ def _register_services(hass: HomeAssistant, entry_id: str):
     hass.services.async_register(DOMAIN, "remove_code", remove_code, vol.Schema({vol.Required("id"): cv.string}))
     hass.services.async_register(DOMAIN, "refresh", refresh)
     hass.services.async_register(DOMAIN, "list_codes", list_codes, supports_response=SupportsResponse.ONLY)
+    hass.services.async_register(DOMAIN, "list_log", list_log, vol.Schema({
+        vol.Optional("count"): cv.positive_int}), supports_response=SupportsResponse.ONLY)
