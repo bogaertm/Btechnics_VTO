@@ -56,3 +56,20 @@ class CountSensor(_Base):
     @property
     def native_value(self):
         return (self.coordinator.data or {}).get(self._key)
+
+    @property
+    def extra_state_attributes(self):
+        # Volledige lijst als attribuut, zodat een dashboardkaart (markdown/template)
+        # alle codes of kaarten van deze deur kan tonen zonder aparte service-aanroep.
+        if self._key == "codes":
+            lijst = [
+                {"naam": (r.get("UserID") or "").strip() or "?", "code": r.get("CommonPassword", "")}
+                for r in self.coordinator.codes
+            ]
+        else:
+            lijst = [
+                {"naam": r.get("CardName") or r.get("UserID") or "?", "kaart": r.get("CardNo", "")}
+                for r in self.coordinator.cards
+            ]
+        lijst.sort(key=lambda x: x["naam"].lower())
+        return {"lijst": lijst}
