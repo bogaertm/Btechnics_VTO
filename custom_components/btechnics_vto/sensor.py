@@ -14,9 +14,8 @@ async def async_setup_entry(hass, entry, async_add_entities):
     async_add_entities(ents)
 
 
-class _Base(CoordinatorEntity):
+class _Base(CoordinatorEntity, SensorEntity):
     _attr_has_entity_name = True
-
     def __init__(self, coordinator):
         super().__init__(coordinator)
         c = coordinator
