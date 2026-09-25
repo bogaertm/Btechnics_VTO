@@ -59,3 +59,8 @@ list_log:
       description: Maximum aantal records per deur (de toestellen bewaren er zelf maximaal 1000)
       example: 1200
       selector: { number: { min: 1, max: 5000, mode: box } }
+    raw:
+      name: Ruwe velden
+      description: Voegt per record alle velden toe zoals het toestel ze bewaart (voor diagnose)
+      example: false
+      selector: { boolean: {} }
