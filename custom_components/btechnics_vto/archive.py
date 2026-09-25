@@ -17,7 +17,7 @@ from contextlib import closing
 from datetime import datetime, tzinfo
 
 from .const import ARCHIVE_KEEP_DAYS, LOG_TAIL
-from .records import method_label, new_since, rec_key
+from .records import method_label, new_since, own_numbers, rec_key, rec_vto
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS access (
@@ -37,7 +37,16 @@ CREATE TABLE IF NOT EXISTS sync_state (
     door_id TEXT PRIMARY KEY,
     buf_len INTEGER NOT NULL
 );
+CREATE TABLE IF NOT EXISTS door_vto (
+    door_id TEXT PRIMARY KEY,
+    vto     TEXT NOT NULL
+);
 """
+
+# Een rij is een kopie van een ander toestel als haar toestelnummer (vto) gekend is en niet het
+# eigen nummer van haar deur is. Kopieen blijven bewaard maar worden nergens getoond of geteld.
+OWN = ("NOT EXISTS (SELECT 1 FROM door_vto d WHERE d.door_id = access.door_id "
+       "AND access.vto <> '' AND d.vto <> access.vto)")
 
 # Onbekende code: het toestel bewaart soms een lege naam, soms "?". Beide tonen als "?".
 NAME = "(CASE WHEN name = '' THEN '?' ELSE name END)"
@@ -72,9 +81,13 @@ class AccessArchive:
     def __init__(self, path: str):
         self._path = path
         self._lock = threading.Lock()
+        self._checked = set()   # deuren waarvan de oude rijen deze sessie al nagekeken zijn
         with self._lock, closing(self._conn()) as c, c:
             c.execute("PRAGMA journal_mode=WAL")
             c.executescript(SCHEMA)
+            # archief van v0.3.0/0.3.1: kolom met het toestelnummer toevoegen
+            if "vto" not in {r["name"] for r in c.execute("PRAGMA table_info(access)")}:
+                c.execute("ALTER TABLE access ADD COLUMN vto TEXT NOT NULL DEFAULT ''")
 
     def _conn(self):
         c = sqlite3.connect(self._path, timeout=30)
@@ -108,19 +121,70 @@ class AccessArchive:
                     "ON CONFLICT(door_id) DO UPDATE SET buf_len = excluded.buf_len",
                     (door_id, len(recs)),
                 )
-            if not new:
-                return 0
+            if new:
+                c.executemany(
+                    "INSERT INTO access (door_id, door, ts, name, card, method, status, vto) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                    [(door_id, door_name, int(k[0]), k[2], k[1], k[3], k[4], rec_vto(r)) for r, k in ((r, rec_key(r)) for r in new)],
+                )
+            # toestelnummers enkel bijwerken als er iets bijkwam (en een keer per deur na het opstarten)
+            if new or door_id not in self._checked:
+                self._fill_legacy(c, door_id, recs)
+                self._update_own(c)
+                if new is not None:
+                    self._checked.add(door_id)
+            return len(new or [])
+
+    def _fill_legacy(self, c, door_id, recs):
+        """Rijen van voor v0.3.3 hebben nog geen toestelnummer: aanvullen uit de buffer van het toestel."""
+        if c.execute("SELECT 1 FROM access WHERE door_id = ? AND vto = '' LIMIT 1", (door_id,)).fetchone() is None:
+            return
+        todo = [(rec_vto(r), door_id, *rec_key(r)) for r in recs if rec_vto(r)]
+        c.executemany(
+            "UPDATE access SET vto = ? WHERE door_id = ? AND vto = '' AND ts = ? AND card = ? AND name = ? "
+            "AND method = ? AND status = ?",
+            [(v, d, int(k0), k1, k2, k3, k4) for v, d, k0, k1, k2, k3, k4 in todo],
+        )
+
+    def _update_own(self, c):
+        """Eigen toestelnummer per deur bijwerken, en oude rijen die niet meer in de buffer staan maar
+        wel een tweeling hebben bij het toestel dat ze echt registreerde, als kopie markeren."""
+        counts = {}
+        for r in c.execute(
+            "SELECT door_id, vto, COUNT(*) n FROM access WHERE vto <> '' AND door_id NOT LIKE '%~verwijderd~%' "
+            "GROUP BY door_id, vto"
+        ):
+            counts.setdefault(r["door_id"], {})[r["vto"]] = r["n"]
+        own = own_numbers(counts)
+        cur = {r["door_id"]: r["vto"] for r in c.execute("SELECT door_id, vto FROM door_vto")}
+        changed = {d: v for d, v in own.items() if cur.get(d) != v}
+        if changed:
             c.executemany(
-                "INSERT INTO access (door_id, door, ts, name, card, method, status) VALUES (?, ?, ?, ?, ?, ?, ?)",
-                [(door_id, door_name, int(k[0]), k[2], k[1], k[3], k[4]) for k in map(rec_key, new)],
+                "INSERT INTO door_vto (door_id, vto) VALUES (?, ?) ON CONFLICT(door_id) DO UPDATE SET vto = excluded.vto",
+                list(changed.items()),
             )
-            return len(new)
+        if c.execute("SELECT 1 FROM access WHERE vto = '' LIMIT 1").fetchone() is not None:
+            c.execute(
+                "UPDATE access SET vto = (SELECT b.vto FROM access b JOIN door_vto d ON d.door_id = b.door_id AND d.vto = b.vto "
+                "  WHERE b.door_id <> access.door_id AND b.ts = access.ts AND b.name = access.name "
+                "  AND b.method = access.method AND b.status = access.status LIMIT 1) "
+                "WHERE vto = '' AND EXISTS (SELECT 1 FROM access b JOIN door_vto d ON d.door_id = b.door_id AND d.vto = b.vto "
+                "  WHERE b.door_id <> access.door_id AND b.ts = access.ts AND b.name = access.name "
+                "  AND b.method = access.method AND b.status = access.status "
+                "  AND b.vto <> COALESCE((SELECT vto FROM door_vto WHERE door_id = access.door_id), ''))"
+            )
+
+    def own_vto(self, door_id: str) -> str | None:
+        with closing(self._conn()) as c:
+            r = c.execute("SELECT vto FROM door_vto WHERE door_id = ?", (door_id,)).fetchone()
+        return r["vto"] if r else None
 
     def detach_door(self, door_id: str, now: float | None = None) -> None:
         """Deur verwijderd: historiek bewaren maar loskoppelen van het deur-id, zodat een nieuwe
         deur met dezelfde naam met een lege lei begint (volledige backfill, geen valse meldingen)."""
         with self._lock, closing(self._conn()) as c, c:
-            c.execute("UPDATE access SET door_id = ? WHERE door_id = ?", (f"{door_id}~verwijderd~{int(now or time.time())}", door_id))
+            new_id = f"{door_id}~verwijderd~{int(now or time.time())}"
+            c.execute("UPDATE access SET door_id = ? WHERE door_id = ?", (new_id, door_id))
+            c.execute("UPDATE door_vto SET door_id = ? WHERE door_id = ?", (new_id, door_id))
             c.execute("DELETE FROM sync_state WHERE door_id = ?", (door_id,))
 
     def prune(self, now: float | None = None) -> int:
@@ -133,7 +197,7 @@ class AccessArchive:
     def query(self, tz: tzinfo, door_ids=None, search=None, person=None, status="all", start=None, end=None,
               limit=200, offset=0, max_id=None) -> dict:
         """tz = tijdzone van Home Assistant, voor de indeling per maand (niet die van de container)."""
-        where, args = [], []
+        where, args = [OWN], []
         if door_ids:
             where.append(f"door_id IN ({','.join('?' * len(door_ids))})")
             args += list(door_ids)
@@ -203,13 +267,13 @@ class AccessArchive:
     def counts_since(self, start: int) -> dict:
         with closing(self._conn()) as c:
             rows = c.execute(
-                "SELECT door_id, COUNT(*) n, SUM(status = '1') o FROM access WHERE ts >= ? GROUP BY door_id", (int(start),)
+                f"SELECT door_id, COUNT(*) n, SUM(status = '1') o FROM access WHERE ts >= ? AND {OWN} GROUP BY door_id", (int(start),)
             ).fetchall()
         return {r["door_id"]: {"opened": r["o"] or 0, "refused": r["n"] - (r["o"] or 0)} for r in rows}
 
     def stats(self) -> dict:
         with closing(self._conn()) as c:
             rows = c.execute(
-                "SELECT door_id, COUNT(*) n, MIN(ts) first, MAX(ts) last FROM access GROUP BY door_id"
+                f"SELECT door_id, COUNT(*) n, MIN(ts) first, MAX(ts) last FROM access WHERE {OWN} GROUP BY door_id"
             ).fetchall()
         return {r["door_id"]: {"count": r["n"], "first": r["first"], "last": r["last"]} for r in rows}
