@@ -485,7 +485,8 @@ def _register_services(hass: HomeAssistant):
             except API_ERRORS as e:
                 raise HomeAssistantError(f"{c.door_name}: {e}") from e
             for r in recs:
-                if isinstance(r, dict):
+                # kopieen van een ander toestel enkel in de ruwe weergave (anders staan ze er dubbel)
+                if isinstance(r, dict) and (raw or c.is_own(r)):
                     f = c._fmt(r)
                     if raw:
                         # alle velden zoals het toestel ze bewaart, voor diagnose (een eventueel wachtwoordveld niet)
