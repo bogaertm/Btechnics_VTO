@@ -68,3 +68,17 @@ list_log:
 device_time:
   name: Klok van de toestellen
   description: Toont de klok en tijdsinstellingen van elke VTO naast de tijd van Home Assistant (alleen lezen).
+
+sync_clock:
+  name: Klok van de toestellen juist zetten
+  description: Zet zomertijd (Europese regel) en tijdsynchronisatie aan op de gekozen deuren. De tijdzone blijft ongewijzigd.
+  fields:
+    doors:
+      name: Deuren
+      required: true
+      example: '["Cafe", "Kammerstraat"]'
+      selector: { object: {} }
+    ntp_server:
+      name: Tijdserver
+      example: be.pool.ntp.org
+      selector: { text: {} }
