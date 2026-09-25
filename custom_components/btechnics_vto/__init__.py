@@ -477,19 +477,26 @@ def _register_services(hass: HomeAssistant):
     async def list_log(call: ServiceCall):
         # Leest rechtstreeks de volledige buffer van elke deur, over alle config entries heen.
         count = call.data.get("count", LOG_FETCH_COUNT)
+        raw = call.data.get("raw", False)
         log = []
         for c in _all_coords(hass).values():
             try:
                 recs = await hass.async_add_executor_job(c._run, c.client.unlocks, count)
             except API_ERRORS as e:
                 raise HomeAssistantError(f"{c.door_name}: {e}") from e
-            log += [c._fmt(r) for r in recs if isinstance(r, dict)]
+            for r in recs:
+                if isinstance(r, dict):
+                    f = c._fmt(r)
+                    if raw:
+                        # alle velden zoals het toestel ze bewaart, voor diagnose (een eventueel wachtwoordveld niet)
+                        f["raw"] = {k: v for k, v in r.items() if k != "Password"}
+                    log.append(f)
         # sorteren op het echte tijdstip (epoch), niet op de tekst: rond de wissel naar
         # wintertijd komt hetzelfde lokale uur twee keer voor
         log.sort(key=lambda f: f["ts"], reverse=True)
         return {"log": [
             {"tijd": f["time"], "deur": f["door"], "naam": f["name"], "methode": f["method"],
-             "geopend": f["opened"], "kaart": f["card"]}
+             "geopend": f["opened"], "kaart": f["card"], **({"ruw": f["raw"]} if "raw" in f else {})}
             for f in log
         ]}
 
@@ -503,4 +510,5 @@ def _register_services(hass: HomeAssistant):
     hass.services.async_register(DOMAIN, "refresh", refresh)
     hass.services.async_register(DOMAIN, "list_codes", list_codes, supports_response=SupportsResponse.ONLY)
     hass.services.async_register(DOMAIN, "list_log", list_log, vol.Schema({
-        vol.Optional("count"): vol.All(vol.Coerce(int), vol.Range(min=1, max=5000))}), supports_response=SupportsResponse.ONLY)
+        vol.Optional("count"): vol.All(vol.Coerce(int), vol.Range(min=1, max=5000)),
+        vol.Optional("raw", default=False): cv.boolean}), supports_response=SupportsResponse.ONLY)
