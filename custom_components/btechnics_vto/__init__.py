@@ -1,12 +1,12 @@
-"""Btechnics VTO: centraal codebeheer en logboek voor Dahua VTO's."""
+Z"""Btechnics VTO: centraal codebeheer en logboek voor Dahua VTO's."""
 import logging
-from datetime import datetime
 
 import voluptuous as vol
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, ServiceCall, SupportsResponse
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import config_validation as cv
+from homeassistant.util import dt as dt_util
 
 from .api import VTOClient, VTOError
 from .const import CONF_DOORS, CONF_HOST, CONF_HTTPS, CONF_PASSWORD, CONF_USERNAME, DOMAIN, METHODS
@@ -25,7 +25,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     coords = {}
     for door in entry.data[CONF_DOORS]:
         client = VTOClient(door[CONF_HOST], door[CONF_HTTPS], door[CONF_USERNAME], door[CONF_PASSWORD])
-        c = DoorCoordinator(hass, door["id"], door["name"], client)
+        c = DoorCoordinator(hass, door["id"], door["name"], client, reg)
         await c.async_config_entry_first_refresh()
         # eerste keer: alle bestaande codes vergrendelen
         await reg.snapshot_protected(door["id"], [r["RecNo"] for r in c.codes])
@@ -172,7 +172,8 @@ def _register_services(hass: HomeAssistant, entry_id: str):
                 raise HomeAssistantError(f"{c.door_name}: {e}") from e
             for r in recs:
                 log.append({
-                    "tijd": datetime.fromtimestamp(r.get("CreateTime", 0)).isoformat(timespec="seconds"),
+                    # CreateTime van het toestel is UTC; via HA's eigen tijdzone omzetten (zie coordinator.py).
+                    "tijd": dt_util.as_local(dt_util.utc_from_timestamp(r.get("CreateTime", 0))).isoformat(timespec="seconds"),
                     "deur": c.door_name,
                     "naam": r.get("CardName") or r.get("UserID") or "?",
                     "methode": METHODS.get(r.get("Method"), str(r.get("Method"))),
