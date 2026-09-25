@@ -16,7 +16,7 @@ import time
 from contextlib import closing
 from datetime import datetime, tzinfo
 
-from .const import ARCHIVE_KEEP_DAYS, LOG_TAIL
+from .const import ARCHIVE_KEEP_DAYS, LOG_LOST_POLLS, LOG_TAIL
 from .records import method_label, new_since, own_numbers, rec_key, rec_vto
 
 SCHEMA = """
@@ -45,6 +45,11 @@ CREATE TABLE IF NOT EXISTS door_vto (
 
 # Een rij is een kopie van een ander toestel als haar toestelnummer (vto) gekend is en niet het
 # eigen nummer van haar deur is. Kopieen blijven bewaard maar worden nergens getoond of geteld.
+# Tijdstip: ts is de ruwe CreateTime van het toestel (de kloktijd van het toestel, gecodeerd als
+# epoch) en dient enkel om records in de buffer terug te vinden. t is het echte tijdstip (UTC epoch),
+# omgerekend met de klokinstellingen van het toestel. Rijen van voor v0.3.5 krijgen t bij de upgrade.
+TS = "COALESCE(t, ts)"
+
 OWN = ("NOT EXISTS (SELECT 1 FROM door_vto d WHERE d.door_id = access.door_id "
        "AND access.vto <> '' AND d.vto <> access.vto)")
 
@@ -82,12 +87,18 @@ class AccessArchive:
         self._path = path
         self._lock = threading.Lock()
         self._checked = set()   # deuren waarvan de oude rijen deze sessie al nagekeken zijn
+        self._timed = set()     # deuren waarvan de rijen zonder echt tijdstip al aangevuld zijn
+        self._lost = {}         # aantal opeenvolgende uitlezingen die niet aansluiten, per deur
         with self._lock, closing(self._conn()) as c, c:
             c.execute("PRAGMA journal_mode=WAL")
             c.executescript(SCHEMA)
             # archief van v0.3.0/0.3.1: kolom met het toestelnummer toevoegen
-            if "vto" not in {r["name"] for r in c.execute("PRAGMA table_info(access)")}:
+            cols = {r["name"] for r in c.execute("PRAGMA table_info(access)")}
+            if "vto" not in cols:
                 c.execute("ALTER TABLE access ADD COLUMN vto TEXT NOT NULL DEFAULT ''")
+            # archief van v0.3.0 tot 0.3.4: kolom met het echte tijdstip toevoegen
+            if "t" not in cols:
+                c.execute("ALTER TABLE access ADD COLUMN t INTEGER")
 
     def _conn(self):
         c = sqlite3.connect(self._path, timeout=30)
@@ -98,8 +109,11 @@ class AccessArchive:
 
     # ---------------------------------------------------------------- schrijven
 
-    def sync(self, door_id: str, door_name: str, recs: list) -> int:
-        """recs = volledige buffer van het toestel in toestelvolgorde. Geeft het aantal nieuwe rijen."""
+    def sync(self, door_id: str, door_name: str, recs: list, to_utc=None) -> int:
+        """recs = volledige buffer van het toestel in toestelvolgorde. Geeft het aantal nieuwe rijen.
+
+        to_utc zet de ruwe CreateTime om naar het echte tijdstip (None: klok van het toestel onbekend,
+        dan blijft t leeg tot ze wel gekend is)."""
         with self._lock, closing(self._conn()) as c, c:
             last = c.execute(
                 "SELECT ts, card, name, method, status FROM access WHERE door_id = ? ORDER BY id DESC LIMIT ?",
@@ -113,6 +127,24 @@ class AccessArchive:
             if row is not None:
                 state["len"] = row["buf_len"]
             new = new_since(recs, keys, state)
+            if new is None and recs:
+                # Sluit niet aan. Meestal een onvolledige uitlezing (volgende keer wel), maar na een
+                # fabrieksreset of gewiste buffer blijft dat zo: dan, net als de coordinator, na
+                # LOG_LOST_POLLS keer de buffer overnemen, zonder wat al in het archief staat.
+                self._lost[door_id] = self._lost.get(door_id, 0) + 1
+                if self._lost[door_id] >= LOG_LOST_POLLS:
+                    self._lost[door_id] = 0
+                    have = {
+                        (str(r["ts"]), r["card"], r["name"], r["method"], r["status"])
+                        for r in c.execute(
+                            "SELECT ts, card, name, method, status FROM access WHERE door_id = ? AND ts BETWEEN ? AND ?",
+                            (door_id, min(int(k[0]) for k in keys), max(int(k[0]) for k in keys)),
+                        )
+                    }
+                    new = [r for r, k in zip(recs, keys) if tuple(k) not in have]
+                    row = None   # buflengte opnieuw vastleggen
+            else:
+                self._lost[door_id] = 0
             if new is not None and (row is None or row["buf_len"] != len(recs)):
                 # enkel bij een aansluitende uitlezing (een onvolledige mag de lengte niet verzetten)
                 # en enkel als er iets veranderde: niet elke 30 s naar de schijf/SD-kaart schrijven
@@ -123,9 +155,13 @@ class AccessArchive:
                 )
             if new:
                 c.executemany(
-                    "INSERT INTO access (door_id, door, ts, name, card, method, status, vto) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-                    [(door_id, door_name, int(k[0]), k[2], k[1], k[3], k[4], rec_vto(r)) for r, k in ((r, rec_key(r)) for r in new)],
+                    "INSERT INTO access (door_id, door, ts, name, card, method, status, vto, t) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    [(door_id, door_name, int(k[0]), k[2], k[1], k[3], k[4], rec_vto(r), to_utc(int(k[0])) if to_utc else None)
+                     for r, k in ((r, rec_key(r)) for r in new)],
                 )
+            if to_utc is not None and door_id not in self._timed:
+                self._fill_time(c, door_id, to_utc)
+                self._timed.add(door_id)
             # toestelnummers enkel bijwerken als er iets bijkwam (en een keer per deur na het opstarten)
             if new or door_id not in self._checked:
                 self._fill_legacy(c, door_id, recs)
@@ -133,6 +169,23 @@ class AccessArchive:
                 if new is not None:
                     self._checked.add(door_id)
             return len(new or [])
+
+    def _fill_time(self, c, door_id, to_utc):
+        """Rijen zonder echt tijdstip (van voor v0.3.5, of toen de klok van het toestel onbekend was)."""
+        todo = c.execute("SELECT id, ts FROM access WHERE door_id = ? AND t IS NULL", (door_id,)).fetchall()
+        if todo:
+            c.executemany("UPDATE access SET t = ? WHERE id = ?", [(to_utc(r["ts"]), r["id"]) for r in todo])
+
+    def recent(self, door_id: str, limit: int) -> list:
+        """Laatst geregistreerde eigen toegangen van een deur (volgorde van het toestel, niet op tijdstip:
+        een verkeerd klokje mag niet bepalen wat de laatste toegang is), met het echte tijdstip."""
+        with closing(self._conn()) as c:
+            rows = c.execute(
+                f"SELECT door_id, door, {TS} ts, {NAME} name, card, method, status FROM access "
+                f"WHERE door_id = ? AND {OWN} ORDER BY id DESC LIMIT ?",
+                (door_id, int(limit)),
+            ).fetchall()
+        return [dict(r) for r in rows]
 
     def _fill_legacy(self, c, door_id, recs):
         """Rijen van voor v0.3.3 hebben nog geen toestelnummer: aanvullen uit de buffer van het toestel."""
@@ -190,7 +243,7 @@ class AccessArchive:
     def prune(self, now: float | None = None) -> int:
         cutoff = int((now or time.time()) - ARCHIVE_KEEP_DAYS * 86400)
         with self._lock, closing(self._conn()) as c, c:
-            return c.execute("DELETE FROM access WHERE ts < ?", (cutoff,)).rowcount
+            return c.execute(f"DELETE FROM access WHERE {TS} < ?", (cutoff,)).rowcount
 
     # ---------------------------------------------------------------- lezen
 
@@ -213,10 +266,10 @@ class AccessArchive:
         elif status == "refused":
             where.append("status <> '1'")
         if start is not None:
-            where.append("ts >= ?")
+            where.append(f"{TS} >= ?")
             args.append(int(start))
         if end is not None:
-            where.append("ts < ?")
+            where.append(f"{TS} < ?")
             args.append(int(end))
         limit = max(0, min(int(limit), MAX_ROWS))
         with closing(self._conn()) as c:
@@ -231,17 +284,17 @@ class AccessArchive:
                 f"SELECT COUNT(*) n, SUM(status = '1') o FROM access {w}", args
             ).fetchone()
             rows = c.execute(
-                f"SELECT id, door_id, door, ts, {NAME} name, card, method, status FROM access {w} "
-                "ORDER BY ts DESC, id DESC LIMIT ? OFFSET ?",
+                f"SELECT id, door_id, door, {TS} ts, {NAME} name, card, method, status FROM access {w} "
+                f"ORDER BY {TS} DESC, id DESC LIMIT ? OFFSET ?",
                 args + [limit, max(0, int(offset))],
             ).fetchall()
             raw_people = c.execute(
-                f"SELECT {NAME} name, COUNT(*) n, SUM(status = '1') o, MAX(ts) last, GROUP_CONCAT(DISTINCT door) doors "
+                f"SELECT {NAME} name, COUNT(*) n, SUM(status = '1') o, MAX({TS}) last, GROUP_CONCAT(DISTINCT door) doors "
                 f"FROM access {w} GROUP BY {NAME}",
                 args,
             ).fetchall()
             months = {}
-            for ts, st in c.execute(f"SELECT ts, status FROM access {w}", args):
+            for ts, st in c.execute(f"SELECT {TS}, status FROM access {w}", args):
                 m = datetime.fromtimestamp(ts, tz).strftime("%Y-%m")
                 b = months.setdefault(m, [0, 0])
                 b[0] += 1
@@ -267,13 +320,13 @@ class AccessArchive:
     def counts_since(self, start: int) -> dict:
         with closing(self._conn()) as c:
             rows = c.execute(
-                f"SELECT door_id, COUNT(*) n, SUM(status = '1') o FROM access WHERE ts >= ? AND {OWN} GROUP BY door_id", (int(start),)
+                f"SELECT door_id, COUNT(*) n, SUM(status = '1') o FROM access WHERE {TS} >= ? AND {OWN} GROUP BY door_id", (int(start),)
             ).fetchall()
         return {r["door_id"]: {"opened": r["o"] or 0, "refused": r["n"] - (r["o"] or 0)} for r in rows}
 
     def stats(self) -> dict:
         with closing(self._conn()) as c:
             rows = c.execute(
-                f"SELECT door_id, COUNT(*) n, MIN(ts) first, MAX(ts) last FROM access WHERE {OWN} GROUP BY door_id"
+                f"SELECT door_id, COUNT(*) n, MIN({TS}) first, MAX({TS}) last FROM access WHERE {OWN} GROUP BY door_id"
             ).fetchall()
         return {r["door_id"]: {"count": r["n"], "first": r["first"], "last": r["last"]} for r in rows}
