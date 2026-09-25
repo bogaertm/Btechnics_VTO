@@ -25,7 +25,7 @@ class CodeRegistry:
         self._store = Store(hass, STORAGE_VERSION, STORAGE_KEY)
         self.managed: dict = {}      # id -> {name, code, doors: {door_id: recno}, created, updated}
         self.protected: dict = {}    # door_id -> [recno, ...]  (snapshot bestaande codes)
-        self.log_state: dict = {}    # door_id -> {"tail": [recordsleutels], "t": epoch laatste record}
+        self.log_state: dict = {}    # door_id -> {"tail": [recordsleutels], "t": epoch laatste record, "len": buffergrootte}
 
     async def load(self):
         data = await self._store.async_load() or {}
@@ -64,7 +64,7 @@ class CodeRegistry:
         return None
 
     async def set_log_state(self, door_id: str, state: dict):
-        self.log_state[door_id] = {"tail": [list(k) for k in state["tail"]], "t": int(state["t"])}
+        self.log_state[door_id] = {"tail": [list(k) for k in state["tail"]], "t": int(state["t"]), "len": int(state.get("len", 0))}
         await self.save()
 
     async def add(self, name: str, code: str, doors: dict) -> str:
@@ -81,6 +81,17 @@ class CodeRegistry:
 
     async def remove(self, cid: str):
         self.managed.pop(cid, None)
+        await self.save()
+
+    async def forget_door(self, door_id: str):
+        """Deur verwijderd: doorloopunt en bescherming weg, en de deur uit beheerde codes halen.
+        Zo start een nieuw toestel met dezelfde naam met een schone lei."""
+        self.log_state.pop(door_id, None)
+        self.protected.pop(door_id, None)
+        for cid in list(self.managed):
+            self.managed[cid]["doors"].pop(door_id, None)
+            if not self.managed[cid]["doors"]:
+                self.managed.pop(cid)
         await self.save()
 
     def export(self) -> dict:
