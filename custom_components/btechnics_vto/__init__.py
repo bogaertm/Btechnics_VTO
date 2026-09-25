@@ -18,6 +18,7 @@ from .api import VTOClient, VTOError
 from .archive import AccessArchive
 from .const import ARCHIVE_FILE, CONF_DOORS, CONF_HOST, CONF_HTTPS, CONF_PASSWORD, CONF_USERNAME, DOMAIN, LOG_FETCH_COUNT
 from .coordinator import API_ERRORS, DoorCoordinator
+from .records import rec_key
 from .registry import CodeRegistry
 from .websocket import ARCHIVE_KEY
 from .websocket import async_register as async_register_websocket
@@ -500,10 +501,17 @@ def _register_services(hass: HomeAssistant):
                 recs = await hass.async_add_executor_job(c._run, c.client.unlocks, count)
             except API_ERRORS as e:
                 raise HomeAssistantError(f"{c.door_name}: {e}") from e
+            times = {}
+            archive = hass.data.get(ARCHIVE_KEY)
+            if archive is not None:
+                try:
+                    times = await hass.async_add_executor_job(archive.true_times, c.door_id)
+                except Exception:  # noqa: BLE001  zonder archief: omrekenen met de huidige klokinstelling
+                    _LOGGER.exception("%s: tijdstippen uit het archief lezen mislukt", c.door_name)
             for r in recs:
                 # kopieen van een ander toestel enkel in de ruwe weergave (anders staan ze er dubbel)
                 if isinstance(r, dict) and (raw or c.is_own(r)):
-                    f = c._fmt(r)
+                    f = c._fmt(r, times.get(tuple(rec_key(r))))
                     if raw:
                         # alle velden zoals het toestel ze bewaart, voor diagnose (een eventueel wachtwoordveld niet)
                         f["raw"] = {k: v for k, v in r.items() if k != "Password"}
