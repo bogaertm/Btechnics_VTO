@@ -36,8 +36,8 @@ from .const import (
     LOG_LOST_POLLS,
     LOG_RECENT_COUNT,
     LOG_TAIL,
-    METHODS,
 )
+from .records import device_order, method_label, new_since, rec_key, rec_time
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -46,61 +46,8 @@ _LOGGER = logging.getLogger(__name__)
 API_ERRORS = (VTOError, OSError, http.client.HTTPException, ValueError, KeyError, TypeError, IndexError)
 
 
-def rec_time(r: dict) -> int:
-    try:
-        return int(r.get("CreateTime") or 0)
-    except (TypeError, ValueError):
-        return 0
-
-
-def rec_no(r: dict) -> int:
-    try:
-        return int(r.get("RecNo"))
-    except (TypeError, ValueError):
-        return 0
-
-
-def rec_key(r: dict) -> list:
-    """Inhoud van een logrecord zonder RecNo (dat is positioneel en dus geen identiteit)."""
-    return [
-        str(rec_time(r)),
-        str(r.get("CardNo") or ""),
-        str(r.get("CardName") or r.get("UserID") or ""),
-        str(r.get("Method")),
-        str(r.get("Status")),
-    ]
-
-
-def device_order(recs) -> list:
-    """Records in volgorde van registratie op het toestel (RecNo oplopend, bij gelijke RecNo de
-    volgorde van ontvangst). Bewust NIET op tijdstip: een verkeerd klokje mag de volgorde niet bepalen."""
-    recs = [r for r in recs if isinstance(r, dict)]
-    return [r for _, r in sorted(enumerate(recs), key=lambda x: (rec_no(x[1]), x[0]))]
-
-
-def new_since(recs: list, keys: list, state: dict):
-    """Geeft de nieuwe records sinds het bewaarde doorloopunt, of None als dat onbepaalbaar is."""
-    tail = state["tail"]
-    if not tail:
-        return recs  # buffer was leeg bij het vorige doorloopunt: alles is nieuw
-    n = len(tail)
-    for i in range(len(keys) - n, -1, -1):
-        if keys[i:i + n] == tail:
-            return recs[i + n:]
-    # De vorige reeks is helemaal uit de buffer geschoven (of de buffer werd gewist).
-    newer = [r for r in recs if rec_time(r) > state["t"]]
-    return newer or None
-
-
-def method_label(m) -> str:
-    try:
-        return METHODS.get(int(m), f"onbekend ({m})")
-    except (TypeError, ValueError):
-        return f"onbekend ({m})"
-
-
 class DoorCoordinator(DataUpdateCoordinator):
-    def __init__(self, hass: HomeAssistant, entry: ConfigEntry, door_id: str, door_name: str, client: VTOClient, registry):
+    def __init__(self, hass: HomeAssistant, entry: ConfigEntry, door_id: str, door_name: str, client: VTOClient, registry, archive=None):
         super().__init__(
             hass, _LOGGER, config_entry=entry, name=f"{DOMAIN} {door_name}", update_interval=timedelta(seconds=LOG_INTERVAL)
         )
@@ -108,6 +55,7 @@ class DoorCoordinator(DataUpdateCoordinator):
         self.door_name = door_name
         self.client = client
         self.registry = registry
+        self.archive = archive
         self.info = {}
         self.codes = []
         self.cards = []
@@ -164,8 +112,9 @@ class DoorCoordinator(DataUpdateCoordinator):
         toestel als "nieuw" binnen.
         """
         recs = device_order(raw)
+        await self._archive(recs)
         keys = [rec_key(r) for r in recs]
-        new_state = {"tail": keys[-LOG_TAIL:], "t": rec_time(recs[-1]) if recs else 0}
+        new_state = {"tail": keys[-LOG_TAIL:], "t": rec_time(recs[-1]) if recs else 0, "len": len(recs)}
         now = time.monotonic()
 
         state = self.registry.get_log_state(self.door_id)
@@ -204,6 +153,15 @@ class DoorCoordinator(DataUpdateCoordinator):
         if new_state != state:
             await self.registry.set_log_state(self.door_id, new_state)
         self._last_ok = now
+
+    async def _archive(self, recs):
+        """Nieuwe records ook in het jaararchief bewaren. Een fout daar mag de deur nooit blokkeren."""
+        if self.archive is None:
+            return
+        try:
+            await self.hass.async_add_executor_job(self.archive.sync, self.door_id, self.door_name, recs)
+        except Exception:  # noqa: BLE001
+            _LOGGER.exception("%s: toegangsarchief bijwerken mislukt", self.door_name)
 
     def _show(self, recs):
         self.recent = [self._fmt(r) for r in reversed(recs[-LOG_RECENT_COUNT:])]
