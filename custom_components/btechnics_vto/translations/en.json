@@ -10,7 +10,7 @@
           "username": "Gebruiker",
           "password": "Wachtwoord"
         },
-        "description": "{reason}"
+        "description": "Vul de gegevens van de VTO in. De naam verschijnt zo op het dashboard (bijvoorbeeld Café of Kammerstraat). Nieuwe deuren worden automatisch opgenomen in het dashboard en het toegangsarchief.\n\n{reason}"
       },
       "more": {
         "title": "Toegevoegd: {doors}",
@@ -20,7 +20,10 @@
       }
     },
     "error": {
-      "cannot_connect": "Kan niet inloggen op de VTO. Controleer IP, HTTPS en wachtwoord. Reden staat hieronder."
+      "cannot_connect": "Kan niet inloggen op de VTO. Controleer IP, HTTPS en wachtwoord. Reden staat hieronder.",
+      "invalid_name": "Geef de deur een naam met minstens één letter of cijfer.",
+      "name_exists": "Er bestaat al een deur met deze naam.",
+      "host_exists": "Deze VTO (IP adres) is al toegevoegd."
     }
   }
 }
