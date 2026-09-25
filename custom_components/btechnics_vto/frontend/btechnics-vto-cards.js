@@ -595,10 +595,19 @@ class VtoCodes extends VtoBase {
   }
 }
 
-const define = (name, cls) => { if (!customElements.get(name)) customElements.define(name, cls); };
-define("btechnics-vto-overzicht", VtoOverzicht);
-define("btechnics-vto-toegang", VtoToegang);
-define("btechnics-vto-codes", VtoCodes);
+// Home Assistant laadt deze module heel vroeg en installeert daarna een eigen custom element
+// registry. Een kaart die we te vroeg registreren is daar niet zichtbaar ("Custom element doesn't
+// exist"). Daarom registreren we opnieuw zolang het nodig is, telkens via window.customElements
+// (het register dat NU actief is) en met een nieuwe subklasse (een constructor mag maar een keer).
+const CARD_CLASSES = [["btechnics-vto-overzicht", VtoOverzicht], ["btechnics-vto-toegang", VtoToegang], ["btechnics-vto-codes", VtoCodes]];
+const define = (name, cls) => {
+  if (window.customElements.get(name)) return;
+  try { window.customElements.define(name, class extends cls {}); } catch (e) { /* volgende poging */ }
+};
+const registerAll = () => { for (const [name, cls] of CARD_CLASSES) define(name, cls); };
+registerAll();
+let registerTries = 0;
+const registerTimer = setInterval(() => { registerAll(); if (++registerTries >= 120) clearInterval(registerTimer); }, 500);
 window.customCards = window.customCards || [];
 for (const [type, name, description] of [
   ["btechnics-vto-overzicht", "Btechnics VTO deuren", "Status van alle VTO-deuren, nieuwe deuren verschijnen automatisch"],
