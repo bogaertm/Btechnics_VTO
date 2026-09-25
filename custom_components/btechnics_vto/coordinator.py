@@ -8,10 +8,9 @@ from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, Upda
 from homeassistant.util import dt as dt_util
 
 from .api import VTOClient, VTOError
-from .const import CODES_INTERVAL, DOMAIN, EVENT_UNLOCK, LOG_INTERVAL, METHODS
+from .const import CODES_INTERVAL, DOMAIN, EVENT_UNLOCK, LOG_FETCH_COUNT, LOG_INTERVAL, METHODS
 
 _LOGGER = logging.getLogger(__name__)
-
 
 class DoorCoordinator(DataUpdateCoordinator):
     def __init__(self, hass: HomeAssistant, door_id: str, door_name: str, client: VTOClient, registry):
@@ -36,7 +35,10 @@ class DoorCoordinator(DataUpdateCoordinator):
             self.client.logout()
 
     def _fetch(self, with_codes: bool):
-        out = {"unlocks": self.client.unlocks(100)}
+        # LOG_FETCH_COUNT: de VTO bewaart per deur een vaste ringbuffer van ca. 1000 records
+        # (oudste eerst); we moeten telkens de VOLLEDIGE buffer ophalen, anders blijven we
+        # eeuwig op de oudste 100 hangen en missen we alle recente toegangen.
+        out = {"unlocks": self.client.unlocks(LOG_FETCH_COUNT)}
         if with_codes:
             out["codes"] = self.client.codes()
             out["cards"] = self.client.cards()
