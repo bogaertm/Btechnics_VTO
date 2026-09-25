@@ -1,4 +1,4 @@
-Z"""Btechnics VTO: centraal codebeheer en logboek voor Dahua VTO's."""
+"""Btechnics VTO: centraal codebeheer en logboek voor Dahua VTO's."""
 import logging
 
 import voluptuous as vol
@@ -9,7 +9,7 @@ from homeassistant.helpers import config_validation as cv
 from homeassistant.util import dt as dt_util
 
 from .api import VTOClient, VTOError
-from .const import CONF_DOORS, CONF_HOST, CONF_HTTPS, CONF_PASSWORD, CONF_USERNAME, DOMAIN, METHODS
+from .const import CONF_DOORS, CONF_HOST, CONF_HTTPS, CONF_PASSWORD, CONF_USERNAME, DOMAIN, LOG_FETCH_COUNT, METHODS
 from .coordinator import DoorCoordinator
 from .registry import CodeRegistry
 
@@ -163,7 +163,7 @@ def _register_services(hass: HomeAssistant, entry_id: str):
     async def list_log(call: ServiceCall):
         # Werkt over alle deuren/config entries heen, ongeacht welke entry als eerste laadde.
         coords = _all_coords(hass)
-        count = call.data.get("count", 100)
+        count = call.data.get("count", LOG_FETCH_COUNT)
         log = []
         for c in coords.values():
             try:
