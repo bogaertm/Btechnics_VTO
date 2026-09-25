@@ -15,7 +15,7 @@ import http.client
 import logging
 import threading
 import time
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import CoreState, HomeAssistant, callback
@@ -37,7 +37,7 @@ from .const import (
     LOG_RECENT_COUNT,
     LOG_TAIL,
 )
-from .records import device_order, method_label, new_since, rec_key, rec_time, rec_vto
+from .records import clock_mode, device_order, method_label, new_since, rec_key, rec_time, rec_vto
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -62,6 +62,7 @@ class DoorCoordinator(DataUpdateCoordinator):
         self.last_unlock = None
         self.recent = []
         self.own_vto = None    # eigen toestelnummer; records met een ander nummer zijn kopieen
+        self.clock = None      # hoe de kloktijd van het toestel naar UTC omgerekend wordt (records.clock_mode)
         self._last_codes_fetch = None
         self._pending = []
         self._lost_polls = 0
@@ -86,6 +87,7 @@ class DoorCoordinator(DataUpdateCoordinator):
         if with_codes:
             out["codes"] = self.client.codes()
             out["cards"] = self.client.cards()
+            out["clock"] = self.client.clock()
             if not self.info:
                 out["info"] = self.client.info()
         return out
@@ -101,8 +103,31 @@ class DoorCoordinator(DataUpdateCoordinator):
             self.codes, self.cards = data["codes"], data["cards"]
             self.info = data.get("info") or self.info
             self._last_codes_fetch = now
+            self._set_clock(data.get("clock"))
         await self._process_unlocks(data["unlocks"])
         return {"codes": len(self.codes), "cards": len(self.cards), "last_unlock": self.last_unlock}
+
+    def _set_clock(self, clock):
+        if not isinstance(clock, dict):
+            return
+        local_offset = int(dt_util.now().utcoffset().total_seconds())
+        mode = clock_mode(clock, dt_util.utcnow(), local_offset)
+        if mode is None:
+            return   # onleesbaar: laatst gekende instelling behouden
+        if mode != self.clock:
+            _LOGGER.info("%s: klok van het toestel %s", self.door_name,
+                         "volgt de tijdzone van Home Assistant" if mode.get("zone") else f"staat op UTC{mode['offset'] / 3600:+g}")
+        self.clock = mode
+
+    def to_utc(self, ct: int) -> int:
+        """Ruwe CreateTime (kloktijd van het toestel) naar het echte tijdstip."""
+        m = self.clock
+        if not m:
+            return ct
+        if m.get("zone"):
+            wall = datetime.fromtimestamp(ct, timezone.utc).replace(tzinfo=dt_util.get_default_time_zone())
+            return int(wall.timestamp())
+        return ct - m["offset"]
 
     async def _process_unlocks(self, raw):
         """Toont altijd het laatst geregistreerde record en meldt enkel echt nieuwe records.
@@ -122,7 +147,7 @@ class DoorCoordinator(DataUpdateCoordinator):
 
         state = self.registry.get_log_state(self.door_id)
         if state is None:
-            self._show(recs)
+            await self._display(recs)
             await self.registry.set_log_state(self.door_id, new_state)
             self._last_ok = now
             return
@@ -138,13 +163,13 @@ class DoorCoordinator(DataUpdateCoordinator):
                 return
             _LOGGER.warning("%s: logboek sluit al %s keer niet aan (buffer gewist?), nieuwe baseline", self.door_name, self._lost_polls)
             self._lost_polls = 0
-            self._show(recs)
+            await self._display(recs)
             await self.registry.set_log_state(self.door_id, new_state)
             self._last_ok = now
             return
 
         self._lost_polls = 0
-        self._show(recs)
+        await self._display(recs)
         if len(new_recs) > LOG_BURST_MAX and self._last_ok is not None and now - self._last_ok < LOG_BURST_WINDOW:
             _LOGGER.warning(
                 "%s: %s nieuwe records op korte tijd is onmogelijk, de vorige uitlezing was onvolledig; niet gemeld",
@@ -163,7 +188,9 @@ class DoorCoordinator(DataUpdateCoordinator):
         if self.archive is None:
             return
         try:
-            await self.hass.async_add_executor_job(self.archive.sync, self.door_id, self.door_name, recs)
+            await self.hass.async_add_executor_job(
+                self.archive.sync, self.door_id, self.door_name, recs, self.to_utc if self.clock else None
+            )
             self.own_vto = await self.hass.async_add_executor_job(self.archive.own_vto, self.door_id)
         except Exception:  # noqa: BLE001
             _LOGGER.exception("%s: toegangsarchief bijwerken mislukt", self.door_name)
@@ -176,6 +203,33 @@ class DoorCoordinator(DataUpdateCoordinator):
         recs = [r for r in recs if self.is_own(r)]
         self.recent = [self._fmt(r) for r in reversed(recs[-LOG_RECENT_COUNT:])]
         self.last_unlock = self._fmt(recs[-1]) if recs else None
+
+    async def _display(self, recs):
+        self._show(recs)
+        await self._show_from_archive()
+
+    async def _show_from_archive(self):
+        """Recentste toegangen uit het archief: daar staat voor elk record het tijdstip zoals het was
+        bij registratie, ook als de klok van het toestel intussen gewijzigd werd."""
+        if self.archive is None:
+            return
+        try:
+            rows = await self.hass.async_add_executor_job(self.archive.recent, self.door_id, LOG_RECENT_COUNT)
+        except Exception:  # noqa: BLE001
+            _LOGGER.exception("%s: recente toegangen uit het archief lezen mislukt", self.door_name)
+            return
+        if not rows:
+            return
+        self.recent = [self._fmt_row(r) for r in rows]
+        self.last_unlock = self.recent[0]
+
+    def _fmt_row(self, r):
+        ts = int(r["ts"])
+        return {
+            "door_id": self.door_id, "door": self.door_name, "name": r["name"] or "?",
+            "method": method_label(r["method"]), "opened": r["status"] == "1", "card": r["card"],
+            "time": dt_util.as_local(dt_util.utc_from_timestamp(ts)).isoformat(timespec="seconds"), "ts": ts,
+        }
 
     def _announce_all(self, unlocks):
         """Events en logboekregels pas versturen als Home Assistant volledig gestart is: bij het
@@ -225,9 +279,9 @@ class DoorCoordinator(DataUpdateCoordinator):
         )
 
     def _fmt(self, r):
-        # CreateTime van het toestel is een Unix-epoch (UTC). Omzetten via de tijdzone die in
-        # Home Assistant is ingesteld (Europe/Brussels), niet via de systeemtijdzone van de container.
-        ts = rec_time(r)
+        # CreateTime is de kloktijd van het toestel; eerst naar het echte tijdstip, dan naar de tijdzone
+        # die in Home Assistant is ingesteld (Europe/Brussels), niet naar die van de container.
+        ts = self.to_utc(rec_time(r))
         local_time = dt_util.as_local(dt_util.utc_from_timestamp(ts))
         return {
             "door_id": self.door_id, "door": self.door_name,
