@@ -1,17 +1,24 @@
 """Btechnics VTO: centraal codebeheer en logboek voor Dahua VTO's."""
 import asyncio
 import logging
+from datetime import timedelta
+from pathlib import Path
 
 import voluptuous as vol
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, ServiceCall, SupportsResponse
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import config_validation as cv
+from homeassistant.helpers.event import async_track_time_interval
+from homeassistant.loader import async_get_integration
 
 from .api import VTOClient, VTOError
-from .const import CONF_DOORS, CONF_HOST, CONF_HTTPS, CONF_PASSWORD, CONF_USERNAME, DOMAIN, LOG_FETCH_COUNT
+from .archive import AccessArchive
+from .const import ARCHIVE_FILE, CONF_DOORS, CONF_HOST, CONF_HTTPS, CONF_PASSWORD, CONF_USERNAME, DOMAIN, LOG_FETCH_COUNT
 from .coordinator import API_ERRORS, DoorCoordinator
 from .registry import CodeRegistry
+from .websocket import ARCHIVE_KEY
+from .websocket import async_register as async_register_websocket
 
 _LOGGER = logging.getLogger(__name__)
 PLATFORMS = ["sensor"]
@@ -22,6 +29,9 @@ SERVICES = ["add_code", "update_code", "remove_code", "refresh", "list_codes", "
 REG_KEY = f"{DOMAIN}_shared_registry"
 REG_LOCK_KEY = f"{DOMAIN}_shared_registry_lock"
 WRITE_LOCK_KEY = f"{DOMAIN}_write_lock"
+GLOBAL_KEY = f"{DOMAIN}_global_setup"
+CARDS_URL = "/btechnics_vto_static"
+CARDS_FILE = "btechnics-vto-cards.js"
 
 CODE_SCHEMA = vol.All(cv.string, vol.Match(r"^\d{4,8}$", msg="code moet 4 tot 8 cijfers zijn"))
 
@@ -41,12 +51,59 @@ async def _async_get_registry(hass: HomeAssistant) -> CodeRegistry:
     return reg
 
 
+async def _async_global_setup(hass: HomeAssistant) -> AccessArchive:
+    """Eenmalig per Home Assistant: toegangsarchief, WebSocket-commando's, dashboardkaarten
+    en het dagelijks opruimen van het archief. Gedeeld door alle config entries."""
+    lock = hass.data.setdefault(REG_LOCK_KEY, asyncio.Lock())
+    async with lock:
+        if GLOBAL_KEY in hass.data:
+            return hass.data.get(ARCHIVE_KEY)
+        try:
+            archive = await hass.async_add_executor_job(AccessArchive, hass.config.path(ARCHIVE_FILE))
+        except Exception:  # noqa: BLE001  het archief is optioneel: de deuren moeten altijd werken
+            _LOGGER.exception("Toegangsarchief kon niet geopend worden; deuren werken verder zonder archief")
+            archive = None
+        if archive is not None:
+            hass.data[ARCHIVE_KEY] = archive
+        async_register_websocket(hass)
+        await _async_register_cards(hass)
+
+        async def _prune(_now=None):
+            try:
+                n = await hass.async_add_executor_job(archive.prune)
+                if n:
+                    _LOGGER.info("Toegangsarchief: %s oude records opgeruimd", n)
+            except Exception:  # noqa: BLE001
+                _LOGGER.exception("Toegangsarchief opruimen mislukt")
+
+        if archive is not None:
+            await _prune()
+            async_track_time_interval(hass, _prune, timedelta(hours=12))
+        hass.data[GLOBAL_KEY] = True
+    return archive
+
+
+async def _async_register_cards(hass: HomeAssistant):
+    """De eigen dashboardkaarten automatisch beschikbaar maken (geen manuele resource nodig)."""
+    if getattr(hass, "http", None) is None or "frontend" not in hass.config.components:
+        return
+    from homeassistant.components.frontend import add_extra_js_url
+    from homeassistant.components.http import StaticPathConfig
+
+    version = (await async_get_integration(hass, DOMAIN)).version
+    await hass.http.async_register_static_paths(
+        [StaticPathConfig(CARDS_URL, str(Path(__file__).parent / "frontend"), False)]
+    )
+    add_extra_js_url(hass, f"{CARDS_URL}/{CARDS_FILE}?v={version}")
+
+
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     reg = await _async_get_registry(hass)
+    archive = await _async_global_setup(hass)
     coords = {}
     for door in entry.data[CONF_DOORS]:
         client = VTOClient(door[CONF_HOST], door[CONF_HTTPS], door[CONF_USERNAME], door[CONF_PASSWORD])
-        c = DoorCoordinator(hass, entry, door["id"], door["name"], client, reg)
+        c = DoorCoordinator(hass, entry, door["id"], door["name"], client, reg, archive)
         await c.async_config_entry_first_refresh()
         # eerste keer: alle bestaande codes vergrendelen
         await reg.snapshot_protected(door["id"], [r["RecNo"] for r in c.codes])
@@ -68,6 +125,16 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 hass.services.async_remove(DOMAIN, s)
             hass.data.pop(DOMAIN, None)
     return ok
+
+
+async def async_remove_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
+    """Config entry verwijderd: opgeslagen toestand van die deuren opruimen (historiek blijft bewaard)."""
+    reg = await _async_get_registry(hass)
+    archive = hass.data.get(ARCHIVE_KEY)
+    for door in entry.data.get(CONF_DOORS, []):
+        await reg.forget_door(door["id"])
+        if archive is not None:
+            await hass.async_add_executor_job(archive.detach_door, door["id"])
 
 
 def _all_coords(hass):
