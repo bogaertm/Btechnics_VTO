@@ -102,6 +102,21 @@ class VTOClient:
             self.call("RecordFinder.destroy", None, obj)
         return recs
 
+    def clock(self):
+        """Alleen lezen: klok en tijdsinstellingen van het toestel (voor diagnose van tijdstippen)."""
+        out = {}
+        for key, method, params in (
+            ("time", "global.getCurrentTime", None),
+            ("ntp", "configManager.getConfig", {"name": "NTP"}),
+            ("locales", "configManager.getConfig", {"name": "Locales"}),
+        ):
+            try:
+                r = self.call(method, params)
+                out[key] = r.get("params") if r.get("result") else {"fout": r.get("error")}
+            except Exception as e:  # noqa: BLE001  diagnose: elke fout gewoon teruggeven
+                out[key] = {"fout": str(e)}
+        return out
+
     def codes(self):
         return self.find(TABLE_CODES)
 
