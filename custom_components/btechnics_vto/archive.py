@@ -176,6 +176,16 @@ class AccessArchive:
         if todo:
             c.executemany("UPDATE access SET t = ? WHERE id = ?", [(to_utc(r["ts"]), r["id"]) for r in todo])
 
+    def true_times(self, door_id: str) -> dict:
+        """Echt tijdstip per record (sleutel = inhoud zoals rec_key), om de buffer van het toestel te tonen."""
+        with closing(self._conn()) as c:
+            return {
+                (str(r["ts"]), r["card"], r["name"], r["method"], r["status"]): r["t"]
+                for r in c.execute(
+                    f"SELECT ts, card, name, method, status, {TS} t FROM access WHERE door_id = ?", (door_id,)
+                )
+            }
+
     def recent(self, door_id: str, limit: int) -> list:
         """Laatst geregistreerde eigen toegangen van een deur (volgorde van het toestel, niet op tijdstip:
         een verkeerd klokje mag niet bepalen wat de laatste toegang is), met het echte tijdstip."""
