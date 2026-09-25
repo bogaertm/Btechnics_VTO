@@ -37,7 +37,7 @@ from .const import (
     LOG_RECENT_COUNT,
     LOG_TAIL,
 )
-from .records import device_order, method_label, new_since, rec_key, rec_time
+from .records import device_order, method_label, new_since, rec_key, rec_time, rec_vto
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -61,6 +61,7 @@ class DoorCoordinator(DataUpdateCoordinator):
         self.cards = []
         self.last_unlock = None
         self.recent = []
+        self.own_vto = None    # eigen toestelnummer; records met een ander nummer zijn kopieen
         self._last_codes_fetch = None
         self._pending = []
         self._lost_polls = 0
@@ -113,6 +114,8 @@ class DoorCoordinator(DataUpdateCoordinator):
         """
         recs = device_order(raw)
         await self._archive(recs)
+        # De herkenning van nieuwe records gebeurt op de volledige buffer (positie), tonen en melden
+        # enkel voor de eigen toegangen: een hoofdtoestel bewaart ook kopieen van zijn onderstations.
         keys = [rec_key(r) for r in recs]
         new_state = {"tail": keys[-LOG_TAIL:], "t": rec_time(recs[-1]) if recs else 0, "len": len(recs)}
         now = time.monotonic()
@@ -148,6 +151,7 @@ class DoorCoordinator(DataUpdateCoordinator):
                 self.door_name, len(new_recs),
             )
             new_recs = []
+        new_recs = [r for r in new_recs if self.is_own(r)]
         if new_recs:
             self._announce_all([self._fmt(r) for r in new_recs])
         if new_state != state:
@@ -160,10 +164,16 @@ class DoorCoordinator(DataUpdateCoordinator):
             return
         try:
             await self.hass.async_add_executor_job(self.archive.sync, self.door_id, self.door_name, recs)
+            self.own_vto = await self.hass.async_add_executor_job(self.archive.own_vto, self.door_id)
         except Exception:  # noqa: BLE001
             _LOGGER.exception("%s: toegangsarchief bijwerken mislukt", self.door_name)
 
+    def is_own(self, r) -> bool:
+        v = rec_vto(r)
+        return not self.own_vto or not v or v == self.own_vto
+
     def _show(self, recs):
+        recs = [r for r in recs if self.is_own(r)]
         self.recent = [self._fmt(r) for r in reversed(recs[-LOG_RECENT_COUNT:])]
         self.last_unlock = self._fmt(recs[-1]) if recs else None
 
