@@ -10,6 +10,7 @@ from homeassistant.core import HomeAssistant, ServiceCall, SupportsResponse
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers.event import async_track_time_interval
+from homeassistant.helpers.service import async_register_admin_service
 from homeassistant.loader import async_get_integration
 from homeassistant.util import dt as dt_util
 
@@ -23,7 +24,7 @@ from .websocket import async_register as async_register_websocket
 
 _LOGGER = logging.getLogger(__name__)
 PLATFORMS = ["sensor"]
-SERVICES = ["add_code", "update_code", "remove_code", "refresh", "list_codes", "list_log", "device_time"]
+SERVICES = ["add_code", "update_code", "remove_code", "refresh", "list_codes", "list_log", "device_time", "sync_clock"]
 
 # Eén gedeeld register voor ALLE config entries en voor de hele levensduur van Home Assistant:
 # meerdere instanties op hetzelfde opslagbestand zouden elkaars codes en doorloopunten overschrijven.
@@ -200,6 +201,20 @@ def _safe_remove(client: VTOClient, recno: int, name: str, code: str):
     if not _matches(rec, name, code):
         raise VTOError(f"veiligheidscontrole: RecNo {recno} is niet meer de code die de integratie aanmaakte, niets verwijderd")
     client.remove_code(recno)
+
+
+def _sync_clock(client: VTOClient, server: str) -> dict:
+    """Zomertijd volgens de Europese regel (laatste zondag van maart 02:00 tot laatste zondag van
+    oktober 03:00) en tijdsynchronisatie aanzetten. De tijdzone zelf blijft ongewijzigd."""
+    before = {"ntp": client.get_config("NTP"), "locales": client.get_config("Locales")}
+    loc = dict(before["locales"])
+    loc["DSTEnable"] = True
+    loc["DSTStart"] = {**(loc.get("DSTStart") or {}), "Month": 3, "Week": -1, "Day": 0, "Hour": 2, "Minute": 0}
+    loc["DSTEnd"] = {**(loc.get("DSTEnd") or {}), "Month": 10, "Week": -1, "Day": 0, "Hour": 3, "Minute": 0}
+    ntp = {**before["ntp"], "Enable": True, "Address": server}
+    client.set_config("Locales", loc)
+    client.set_config("NTP", ntp)
+    return {"voor": before, "na": {"ntp": client.get_config("NTP"), "locales": client.get_config("Locales")}, "klok": client.clock()}
 
 
 def _read_codes(client: VTOClient) -> list:
@@ -514,6 +529,20 @@ def _register_services(hass: HomeAssistant):
         return {"toestellen": out}
 
     hass.services.async_register(DOMAIN, "device_time", device_time, supports_response=SupportsResponse.ONLY)
+
+    async def sync_clock(call: ServiceCall):
+        coords = _all_coords(hass)
+        out = []
+        for did in _door_ids(coords, call.data["doors"]):
+            c = coords[did]
+            res = await _exec(c, _sync_clock, call.data["ntp_server"])
+            await c.async_refresh_codes()   # klok meteen opnieuw inlezen
+            out.append({"deur": c.door_name, **res})
+        return {"toestellen": out}
+
+    async_register_admin_service(hass, DOMAIN, "sync_clock", sync_clock, vol.Schema({
+        vol.Required("doors"): vol.All(cv.ensure_list, [cv.string]),
+        vol.Optional("ntp_server", default="be.pool.ntp.org"): cv.string}), supports_response=SupportsResponse.OPTIONAL)
     hass.services.async_register(DOMAIN, "add_code", add_code, vol.Schema({
         vol.Required("name"): cv.string, vol.Required("code"): CODE_SCHEMA,
         vol.Required("doors"): vol.All(cv.ensure_list, [cv.string])}), supports_response=SupportsResponse.OPTIONAL)
