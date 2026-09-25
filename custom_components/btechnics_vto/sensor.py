@@ -1,6 +1,6 @@
 """Sensoren per deur: laatste unlock, aantal codes, aantal badges."""
 from homeassistant.components.sensor import SensorEntity
-from homeassistant.helpers.entity import DeviceInfo
+from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import DOMAIN
@@ -16,6 +16,7 @@ async def async_setup_entry(hass, entry, async_add_entities):
 
 class _Base(CoordinatorEntity, SensorEntity):
     _attr_has_entity_name = True
+
     def __init__(self, coordinator):
         super().__init__(coordinator)
         c = coordinator
@@ -26,7 +27,9 @@ class _Base(CoordinatorEntity, SensorEntity):
 
 
 class LastUnlockSensor(_Base):
-    _attr_icon = "mdi:door-open"
+    # De lijst met recente toegangen en het kaartnummer niet in de databank-historiek bewaren:
+    # ze staan altijd live op het toestel en zouden de databank nodeloos doen groeien.
+    _unrecorded_attributes = frozenset({"recent", "card"})
 
     def __init__(self, coordinator):
         super().__init__(coordinator)
@@ -36,15 +39,23 @@ class LastUnlockSensor(_Base):
     @property
     def native_value(self):
         u = self.coordinator.last_unlock
-        return u["name"] if u else None
+        return u["name"][:255] if u else None
+
+    @property
+    def icon(self):
+        u = self.coordinator.last_unlock
+        return "mdi:door-closed-lock" if u and not u["opened"] else "mdi:door-open"
 
     @property
     def extra_state_attributes(self):
-        return self.coordinator.last_unlock or {}
+        return {**(self.coordinator.last_unlock or {}), "recent": self.coordinator.recent}
 
 
 class CountSensor(_Base):
     _attr_state_class = "measurement"
+    # Codes en kaartnummers staan in het attribuut "lijst" voor het dashboard, maar worden
+    # bewust NIET in de databank-historiek opgeslagen (toegangscodes horen daar niet thuis).
+    _unrecorded_attributes = frozenset({"lijst"})
 
     def __init__(self, coordinator, key, name, icon):
         super().__init__(coordinator)
@@ -71,5 +82,5 @@ class CountSensor(_Base):
                 {"naam": r.get("CardName") or r.get("UserID") or "?", "kaart": r.get("CardNo", "")}
                 for r in self.coordinator.cards
             ]
-        lijst.sort(key=lambda x: x["naam"].lower())
+        lijst.sort(key=lambda x: str(x["naam"]).lower())
         return {"lijst": lijst}
