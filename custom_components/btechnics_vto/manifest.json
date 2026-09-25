@@ -1,7 +1,12 @@
 {
   "domain": "btechnics_vto",
   "name": "Btechnics VTO",
-  "version": "0.2.0",
+  "after_dependencies": [
+    "frontend",
+    "http",
+    "websocket_api"
+  ],
+  "version": "0.3.0",
   "documentation": "https://github.com/bogaertm/Btechnics_VTO",
   "issue_tracker": "https://github.com/bogaertm/Btechnics_VTO/issues",
   "codeowners": [
