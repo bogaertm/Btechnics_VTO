@@ -23,6 +23,10 @@ LOG_TAIL = 10
 LOG_LOST_POLLS = 10
 LOG_BURST_MAX = 100
 LOG_BURST_WINDOW = 300
+# Toegangsarchief (eigen databank): iets meer dan een jaar bewaren zodat een volledig jaar
+# altijd beschikbaar is.
+ARCHIVE_FILE = "btechnics_vto_toegang.db"
+ARCHIVE_KEEP_DAYS = 400
 TABLE_CODES = "AccessControlCommonPassword"
 TABLE_CARDS = "AccessControlCard"
 TABLE_LOG = "AccessControlCardRec"
