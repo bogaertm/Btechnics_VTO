@@ -117,6 +117,17 @@ class VTOClient:
                 out[key] = {"fout": str(e)}
         return out
 
+    def get_config(self, name: str) -> dict:
+        r = self.call("configManager.getConfig", {"name": name})
+        if not r.get("result"):
+            raise VTOError(f"getConfig {name} geweigerd: {r.get('error')}")
+        return r["params"]["table"]
+
+    def set_config(self, name: str, table: dict):
+        r = self.call("configManager.setConfig", {"name": name, "table": table, "options": []})
+        if not r.get("result"):
+            raise VTOError(f"setConfig {name} geweigerd: {r.get('error')}")
+
     def codes(self):
         return self.find(TABLE_CODES)
 
