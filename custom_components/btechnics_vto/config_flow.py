@@ -34,10 +34,24 @@ class BtechnicsVTOConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     def __init__(self):
         self._doors = []
 
+    def _taken(self):
+        """Deur-ids en IP-adressen die al gebruikt worden (in alle bestaande entries en in deze flow)."""
+        doors = [d for e in self._async_current_entries(include_ignore=False) for d in e.data.get(CONF_DOORS, [])] + self._doors
+        return {d["id"] for d in doors}, {str(d[CONF_HOST]).strip().lower() for d in doors}
+
     async def async_step_user(self, user_input=None):
         errors = {}
         placeholders = {"reason": ""}
         if user_input is not None:
+            user_input = {**user_input, "name": user_input["name"].strip(), CONF_HOST: user_input[CONF_HOST].strip()}
+            ids, hosts = self._taken()
+            if not user_input["name"] or not _door_id(user_input["name"]):
+                errors["name"] = "invalid_name"
+            elif _door_id(user_input["name"]) in ids:
+                errors["name"] = "name_exists"
+            elif user_input[CONF_HOST].lower() in hosts:
+                errors[CONF_HOST] = "host_exists"
+        if user_input is not None and not errors:
             client = VTOClient(user_input[CONF_HOST], user_input[CONF_HTTPS], user_input[CONF_USERNAME], user_input[CONF_PASSWORD])
             try:
                 info = await self.hass.async_add_executor_job(_test, client)
@@ -52,6 +66,7 @@ class BtechnicsVTOConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 return await self.async_step_more()
         schema = DOOR_SCHEMA
         if user_input is not None:
+            user_input = {k: v for k, v in user_input.items() if k != CONF_PASSWORD}
             schema = self.add_suggested_values_to_schema(DOOR_SCHEMA, user_input)
         return self.async_show_form(step_id="user", data_schema=schema, errors=errors, description_placeholders=placeholders)
 
@@ -59,7 +74,7 @@ class BtechnicsVTOConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         if user_input is not None:
             if user_input["add_another"]:
                 return await self.async_step_user()
-            return self.async_create_entry(title="Btechnics VTO", data={CONF_DOORS: self._doors})
+            return self.async_create_entry(title=", ".join(d["name"] for d in self._doors), data={CONF_DOORS: self._doors})
         names = ", ".join(d["name"] for d in self._doors)
         return self.async_show_form(
             step_id="more",
