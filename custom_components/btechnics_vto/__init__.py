@@ -11,6 +11,7 @@ from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers.event import async_track_time_interval
 from homeassistant.loader import async_get_integration
+from homeassistant.util import dt as dt_util
 
 from .api import VTOClient, VTOError
 from .archive import AccessArchive
@@ -22,7 +23,7 @@ from .websocket import async_register as async_register_websocket
 
 _LOGGER = logging.getLogger(__name__)
 PLATFORMS = ["sensor"]
-SERVICES = ["add_code", "update_code", "remove_code", "refresh", "list_codes", "list_log"]
+SERVICES = ["add_code", "update_code", "remove_code", "refresh", "list_codes", "list_log", "device_time"]
 
 # Eén gedeeld register voor ALLE config entries en voor de hele levensduur van Home Assistant:
 # meerdere instanties op hetzelfde opslagbestand zouden elkaars codes en doorloopunten overschrijven.
@@ -501,6 +502,18 @@ def _register_services(hass: HomeAssistant):
             for f in log
         ]}
 
+    async def device_time(call: ServiceCall):
+        # Alleen lezen: klok van elk toestel naast de klok van Home Assistant, om tijdsverschillen op te sporen.
+        out = []
+        for c in _all_coords(hass).values():
+            try:
+                clk = await hass.async_add_executor_job(c._run, c.client.clock)
+            except API_ERRORS as e:
+                clk = {"fout": str(e)}
+            out.append({"deur": c.door_name, "home_assistant": dt_util.now().isoformat(timespec="seconds"), **clk})
+        return {"toestellen": out}
+
+    hass.services.async_register(DOMAIN, "device_time", device_time, supports_response=SupportsResponse.ONLY)
     hass.services.async_register(DOMAIN, "add_code", add_code, vol.Schema({
         vol.Required("name"): cv.string, vol.Required("code"): CODE_SCHEMA,
         vol.Required("doors"): vol.All(cv.ensure_list, [cv.string])}), supports_response=SupportsResponse.OPTIONAL)
