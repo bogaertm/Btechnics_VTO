@@ -278,10 +278,12 @@ class DoorCoordinator(DataUpdateCoordinator):
             )
         )
 
-    def _fmt(self, r):
+    def _fmt(self, r, ts=None):
         # CreateTime is de kloktijd van het toestel; eerst naar het echte tijdstip, dan naar de tijdzone
         # die in Home Assistant is ingesteld (Europe/Brussels), niet naar die van de container.
-        ts = self.to_utc(rec_time(r))
+        # ts: echt tijdstip uit het archief, als dat gekend is (juist ook na een klokwijziging).
+        if ts is None:
+            ts = self.to_utc(rec_time(r))
         local_time = dt_util.as_local(dt_util.utc_from_timestamp(ts))
         return {
             "door_id": self.door_id, "door": self.door_name,
