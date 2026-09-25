@@ -3,6 +3,8 @@
 Het logboek van het toestel is een ringbuffer van max 1000 records in volgorde van registratie.
 RecNo is positioneel en dus geen identiteit: records worden herkend op inhoud en positie.
 """
+from datetime import datetime, timezone
+
 from .const import METHODS
 
 
@@ -95,3 +97,23 @@ def method_label(m) -> str:
         return METHODS.get(int(m), f"onbekend ({m})")
     except (TypeError, ValueError):
         return f"onbekend ({m})"
+
+
+def clock_mode(clock: dict, utc_now: datetime, local_offset: int):
+    """Hoe de CreateTime van dit toestel omgerekend moet worden.
+
+    Het toestel bewaart CreateTime als zijn eigen kloktijd, gecodeerd alsof het UTC is (vastgesteld
+    september 2026: toegang om 19:10:51 Brussel, klok van het toestel 18:10:51, CreateTime 18:10:51Z).
+    Geeft {"zone": True} als het toestel zomertijd volgt en op dezelfde tijd staat als Home Assistant
+    (dan is CreateTime de lokale tijd van Home Assistant), anders {"offset": s} met het vaste verschil
+    tussen de klok van het toestel en UTC, afgerond op een kwartier. None als de klok onleesbaar is."""
+    try:
+        wall = datetime.strptime(str(clock["time"]["time"]).strip(), "%Y-%m-%d %H:%M:%S")
+    except (KeyError, TypeError, ValueError):
+        return None
+    now = utc_now.astimezone(timezone.utc).replace(tzinfo=None)
+    offset = int(round((wall - now).total_seconds() / 900.0)) * 900
+    dst = bool(((clock.get("locales") or {}).get("table") or {}).get("DSTEnable"))
+    if dst and offset == local_offset:
+        return {"zone": True}
+    return {"offset": offset}
