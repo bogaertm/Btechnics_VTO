@@ -20,6 +20,34 @@ def rec_no(r: dict) -> int:
         return 0
 
 
+def rec_vto(r: dict) -> str:
+    """Nummer van het toestel dat de toegang registreerde (VTONumber, bv. "8001").
+
+    Een hoofdtoestel bewaart ook een kopie van de toegangen van zijn onderstations (vastgesteld
+    op Cafe 8001 met Kammerstraat 8002, september 2026). Leeg bij firmware zonder dit veld."""
+    return str(r.get("VTONumber") or "").strip()
+
+
+def own_numbers(counts: dict) -> dict:
+    """Eigen toestelnummer per deur, uit {deur: {nummer: aantal}}.
+
+    Een deur die maar een nummer kent, is een los toestel of onderstation: dat nummer is van haar.
+    Die nummers vallen weg bij de andere deuren (daar zijn het kopieen); van wat overblijft is het
+    meest voorkomende nummer het eigen nummer. Zonder gegevens of bij gelijkstand: geen eigen nummer
+    (dan wordt niets verborgen)."""
+    singles = {d: next(iter(c)) for d, c in counts.items() if len(c) == 1}
+    out = dict(singles)
+    for d, c in counts.items():
+        if d in singles:
+            continue
+        taken = {v for od, v in singles.items() if od != d}
+        rest = {v: n for v, n in c.items() if v not in taken}
+        top = sorted(rest.items(), key=lambda x: -x[1])
+        if top and (len(top) == 1 or top[0][1] > top[1][1]):   # bij gelijkstand geen keuze maken
+            out[d] = top[0][0]
+    return out
+
+
 def rec_key(r: dict) -> list:
     """Inhoud van een logrecord zonder RecNo (dat is positioneel en dus geen identiteit)."""
     return [
