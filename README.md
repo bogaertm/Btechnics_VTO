@@ -51,4 +51,8 @@ data:
 
 De integratie spreekt de VTO's aan via dezelfde RPC2 interface als hun eigen webinterface (RecordFinder en RecordUpdater op de tabellen AccessControlCommonPassword, AccessControlCard en AccessControlCardRec). Logboek elke 30 seconden, codes en badges elke 5 minuten.
 
+Een hoofdtoestel bewaart ook een kopie van elke toegang van zijn onderstations (veld VTONumber, bv. Cafe 8001 met Kammerstraat 8002). De integratie bepaalt per deur automatisch het eigen toestelnummer en toont en meldt enkel de eigen toegangen; kopieen blijven in het archief maar worden niet geteld.
+
+Het toestel bewaart het tijdstip van een toegang als zijn eigen kloktijd. De integratie leest elke 5 minuten de klok en de tijdsinstellingen van het toestel en rekent elk tijdstip om naar de echte tijd. Met `btechnics_vto.sync_clock` (enkel beheerders) zet je op afstand zomertijd en tijdsynchronisatie aan; `btechnics_vto.device_time` toont de klok van elk toestel.
+
 Het logboek van een VTO is een ringbuffer van maximaal 1000 records, oudste eerst, waarin het recordnummer positioneel is. Nieuwe toegangen worden daarom herkend op positie en inhoud, nooit op recordnummer. Het archief staat in `btechnics_vto_toegang.db` in de configmap en bewaart 400 dagen.
