@@ -1,18 +1,21 @@
-"""Register van codes die via de integratie zijn aangemaakt.
+"""Register van codes die via de integratie zijn aangemaakt, gedeeld door alle config entries.
 
 Alles wat NIET in dit register staat is een bestaande code en is alleen-lezen.
 Daarbovenop staat een snapshot van alle RecNo's bij eerste start (protected):
 die kunnen nooit gewijzigd of verwijderd worden, ook niet als het register corrupt zou zijn.
 
-Ook het logboek-doorloopunt (laatst verwerkte RecNo per deur) wordt hier bewaard, zodat een
-herstart van Home Assistant niet telkens een nieuwe "baseline" trekt en zo echte, nog niet
-getoonde toegangsgebeurtenissen zou verliezen.
+Ook het logboek-doorloopunt per deur wordt hier bewaard (de inhoud van de laatst verwerkte
+records in toestelvolgorde, plus het tijdstip van het allerlaatste), zodat een herstart van
+Home Assistant niets dubbel logt en niets verliest.
+
+Er mag maar één instantie per Home Assistant bestaan (zie __init__.py): meerdere instanties op
+hetzelfde opslagbestand zouden elkaars gegevens overschrijven.
 """
 import uuid
-from datetime import datetime
 
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.storage import Store
+from homeassistant.util import dt as dt_util
 
 from .const import STORAGE_KEY, STORAGE_VERSION
 
@@ -22,7 +25,7 @@ class CodeRegistry:
         self._store = Store(hass, STORAGE_VERSION, STORAGE_KEY)
         self.managed: dict = {}      # id -> {name, code, doors: {door_id: recno}, created, updated}
         self.protected: dict = {}    # door_id -> [recno, ...]  (snapshot bestaande codes)
-        self.log_state: dict = {}    # door_id -> laatst verwerkte RecNo uit het logboek
+        self.log_state: dict = {}    # door_id -> {"tail": [recordsleutels], "t": epoch laatste record}
 
     async def load(self):
         data = await self._store.async_load() or {}
@@ -49,24 +52,31 @@ class CodeRegistry:
         """Schrijven op een RecNo mag enkel als hij in het register staat EN niet beschermd is."""
         return self.is_managed(door_id, recno) and not self.is_protected(door_id, recno)
 
-    def get_last_recno(self, door_id: str):
-        """None = deze deur is nog nooit gezien: de coordinator moet dan een stille baseline trekken."""
-        return self.log_state.get(door_id)
+    def get_log_state(self, door_id: str):
+        """None = geen (geldig) doorloopunt: de coordinator trekt dan een stille baseline.
+        Het oude formaat (een los RecNo-getal uit v0.1.9) is onbruikbaar en telt ook als None."""
+        s = self.log_state.get(door_id)
+        if (
+            isinstance(s, dict) and isinstance(s.get("t"), int) and isinstance(s.get("tail"), list)
+            and all(isinstance(k, list) for k in s["tail"])
+        ):
+            return s
+        return None
 
-    async def set_last_recno(self, door_id: str, recno: int):
-        self.log_state[door_id] = int(recno)
+    async def set_log_state(self, door_id: str, state: dict):
+        self.log_state[door_id] = {"tail": [list(k) for k in state["tail"]], "t": int(state["t"])}
         await self.save()
 
     async def add(self, name: str, code: str, doors: dict) -> str:
         cid = uuid.uuid4().hex[:8]
-        now = datetime.now().isoformat(timespec="seconds")
+        now = dt_util.now().isoformat(timespec="seconds")
         self.managed[cid] = {"name": name, "code": code, "doors": doors, "created": now, "updated": now}
         await self.save()
         return cid
 
     async def update(self, cid: str, name: str, code: str, doors: dict):
         m = self.managed[cid]
-        m.update({"name": name, "code": code, "doors": doors, "updated": datetime.now().isoformat(timespec="seconds")})
+        m.update({"name": name, "code": code, "doors": doors, "updated": dt_util.now().isoformat(timespec="seconds")})
         await self.save()
 
     async def remove(self, cid: str):
