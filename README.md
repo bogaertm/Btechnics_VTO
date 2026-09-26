@@ -45,7 +45,7 @@ Alle codes en badges op de toestellen zijn beheerbaar via de kaart `btechnics-vt
 
 Een toestel kent geen status of geldigheid voor codes, daarom wordt blokkeren gedaan door het record te verwijderen en het in Home Assistant te bewaren. Voor elke schrijfactie controleert de integratie op het toestel of het record nog exact overeenkomt. Wie wat deed, staat in het overzicht Wijzigingen op de kaart. Het register staat in `.storage/btechnics_vto_registry`.
 
-Een nieuwe badge aanmaken kan (nog) niet, bestaande badges wel beheren.
+Een nieuwe badge: hou ze eerst voor een lezer (ze wordt geweigerd), dan verschijnt haar nummer bij Nieuwe badge op de kaart. Ze krijgt dezelfde velden en rechten als de bestaande badges. De kaart ververst elke 30 s.
 
 ## Services
 
@@ -62,7 +62,7 @@ data:
   until: "2026-10-01 08:00:00"   # weglaten = tot deblokkeren
 ```
 
-Verder: `update_code`, `remove_code`, `unblock`, `retire`, `restore`, `forget`, `rename_badge`, `list_codes`, `list_log`, `device_time`, `sync_clock`. Alle services zijn enkel voor beheerders.
+Verder: `add_badge`, `update_code`, `remove_code`, `unblock`, `retire`, `restore`, `forget`, `rename_badge`, `list_codes`, `list_log`, `device_time`, `sync_clock`. Alle services zijn enkel voor beheerders.
 
 ## Werking
 

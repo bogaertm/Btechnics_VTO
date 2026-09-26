@@ -150,3 +150,24 @@ rename_badge:
       name: Naam
       required: true
       selector: { text: {} }
+add_badge:
+  name: Badge toevoegen
+  description: Voegt een nieuwe badge toe op een of meerdere deuren, met dezelfde rechten als de bestaande badges.
+  fields:
+    name:
+      name: Naam
+      required: true
+      example: "Jan Peeters"
+      selector: { text: {} }
+    card:
+      name: Badgenummer
+      description: Zoals het toestel het toont, bv. 3CFC52F1. Hou een onbekende badge voor een lezer, het nummer verschijnt dan in het logboek.
+      required: true
+      example: "3CFC52F1"
+      selector: { text: {} }
+    doors:
+      name: Deuren
+      description: Lijst van deurnamen of ids
+      required: true
+      example: '["Cafe", "Kammerstraat"]'
+      selector: { object: {} }

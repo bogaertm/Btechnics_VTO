@@ -28,7 +28,7 @@ from .websocket import async_register as async_register_websocket
 _LOGGER = logging.getLogger(__name__)
 PLATFORMS = ["sensor"]
 SERVICES = ["add_code", "update_code", "remove_code", "refresh", "list_codes", "list_log", "device_time", "sync_clock",
-            "block", "unblock", "retire", "restore", "forget", "rename_badge"]
+            "block", "unblock", "retire", "restore", "forget", "rename_badge", "add_badge"]
 
 # Eén gedeeld register voor ALLE config entries en voor de hele levensduur van Home Assistant:
 # meerdere instanties op hetzelfde opslagbestand zouden elkaars codes en doorloopunten overschrijven.
@@ -691,6 +691,22 @@ def _register_services(hass: HomeAssistant):
             raise HomeAssistantError("naam mag niet leeg zijn")
         user = await mgr.user_name(call.context)
         return await mgr.guarded(mgr.rename_badge, call.data["id"], name, user)
+
+    async def add_badge(call: ServiceCall):
+        name = call.data["name"].strip()
+        if not name:
+            raise HomeAssistantError("naam mag niet leeg zijn")
+        door_ids = _door_ids(_all_coords(hass), call.data["doors"])
+        if not door_ids:
+            raise HomeAssistantError("kies minstens één deur")
+        user = await mgr.user_name(call.context)
+        return await mgr.guarded(mgr.add_badge, name, call.data["card"].upper(), door_ids, user)
+
+    async_register_admin_service(hass, DOMAIN, "add_badge", add_badge, vol.Schema({
+        vol.Required("name"): cv.string,
+        vol.Required("card"): vol.All(cv.string, vol.Match(r"^[0-9A-Fa-f]{4,16}$", msg="badgenummer: 4 tot 16 tekens 0-9 en A-F")),
+        vol.Required("doors"): vol.All(cv.ensure_list, [cv.string]),
+    }), supports_response=SupportsResponse.OPTIONAL)
 
     ID_SCHEMA = vol.Schema({vol.Required("id"): cv.string})
     async_register_admin_service(hass, DOMAIN, "block", block, vol.Schema({

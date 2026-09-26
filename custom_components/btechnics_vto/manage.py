@@ -77,6 +77,37 @@ def _put(client, kind: str, record: dict, name: str, sec: str) -> int:
     return recno
 
 
+# Nieuwe badge: dezelfde velden als de bestaande badges op de toestellen (uitgelezen 26/09/2026,
+# alle 44 records identiek op deze velden). Doors [0] = het slot dat met badge en code opengaat
+# (in het logboek openen alle badges en codes via Door 0); zelfde rechten als een code.
+BADGE_TEMPLATE = {
+    "CardStatus": 0, "CardType": 0, "CitizenIDNo": "", "Doors": [0], "DynamicCheckCode": "",
+    "FirstEnter": False, "Handicap": False, "IsValid": False, "Password": "", "RepeatEnterRouteTimeout": 0,
+    "TimeSections": None, "UseTime": -1, "UserID": "9999", "UserType": 0, "VTOPosition": "",
+    "ValidDateEnd": "0000-00-00 00:00:00", "ValidDateStart": "0000-00-00 00:00:00",
+}
+
+
+def _next_person_id(cards) -> str:
+    nums = [int(p) for p in (str(r.get("PersonId") or "") for r in cards) if p.isdigit()]
+    return str(max(nums, default=0) + 1)
+
+
+def _new_card(client, name: str, card: str) -> int:
+    """Nieuwe badge schrijven als het nummer nog nergens op dit toestel staat, en nakijken dat ze er staat."""
+    cards = client.cards()
+    for r in cards:
+        if (r.get("CardNo") or "").upper() == card:
+            raise CodeInUse(f"badge staat al op het toestel bij {rec_identity(r, 'badge')[0] or '?'}")
+    rec = dict(BADGE_TEMPLATE, Doors=list(BADGE_TEMPLATE["Doors"]), CardName=name, UserName=name, CardNo=card,
+               PersonId=_next_person_id(cards))
+    recno = client.add_card(rec)
+    hit = _find(client.cards(), recno) if recno >= 0 else None
+    if hit is None or rec_identity(hit, "badge") != (name, card):
+        raise VTOError("badge niet teruggevonden op het toestel na het opslaan")
+    return recno
+
+
 def _rename_card(client, recno: int, old_name: str, sec: str, name: str):
     rec = _find(client.cards(), recno)
     if rec is None or rec_identity(rec, "badge") != (old_name, sec):
@@ -357,6 +388,50 @@ class Manager:
             self.notify(msg, cid)
             raise HomeAssistantError(msg)
         return {"id": cid}
+
+    async def add_badge(self, name: str, card: str, door_ids: list, user: str):
+        """Nieuwe badge op de gekozen deuren. Alles of niets: lukt het niet overal, dan wordt ze
+        teruggenomen waar ze al stond. Wat niet terug kan, blijft zichtbaar in de lijst."""
+        coords = self._coords()
+        for m in self.reg.managed.values():
+            if m.get("kind") == "badge" and (m.get("card") or "").upper() == card:
+                raise HomeAssistantError(f"badge {card} is al gekend bij {m.get('name') or '?'}"
+                                         + ("" if m.get("status") == "active" else " (geblokkeerd of uit dienst)"))
+        for did in door_ids:
+            c = coords[did]
+            for r in c.cards:
+                if (r.get("CardNo") or "").upper() == card:
+                    raise HomeAssistantError(f"badge staat al op {c.door_name} bij {rec_identity(r, 'badge')[0] or '?'}")
+        doors, attempted = {}, []
+        try:
+            for did in door_ids:
+                attempted.append(did)
+                doors[did] = await self._exec(coords[did], _new_card, name, card)
+        except HomeAssistantError as err:
+            if isinstance(err.__cause__, CodeInUse):
+                attempted.remove(did)
+            left = []
+            for d in attempted:
+                recs = await self._device(coords[d], "badge")
+                hits = [r for r in (recs or []) if rec_identity(r, "badge") == (name, card)]
+                if recs is None:
+                    left.append(coords[d].door_name)
+                for r in hits:
+                    try:
+                        await self._exec(coords[d], _take, "badge", int(r["RecNo"]), name, card)
+                    except HomeAssistantError:
+                        left.append(coords[d].door_name)
+            msg = f"badge '{name}' niet toegevoegd: {err}"
+            if left:
+                msg += f". Kijk na op {', '.join(left)}: de badge kan daar toch staan (verschijnt dan vanzelf in de lijst)."
+                self.notify(msg, f"badge_{card}")
+            raise HomeAssistantError(msg) from err
+        finally:
+            await self._refresh(door_ids)
+        cid = self.reg._new(kind="badge", name=name, secret=card, doors=doors, source="home assistant")
+        self.reg.log(user, "toegevoegd", self.reg.managed[cid], self.door_names(doors))
+        await self.reg.save()
+        return {"id": cid, "doors": doors}
 
     async def forget(self, cid: str, user: str):
         """Een ingang die uit dienst is definitief uit de lijst halen (de toegangshistoriek blijft)."""

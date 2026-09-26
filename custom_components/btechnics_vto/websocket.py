@@ -127,8 +127,8 @@ def ws_codes(hass, connection, msg):
 
 @websocket_api.require_admin
 @websocket_api.websocket_command({vol.Required("type"): f"{DOMAIN}/manage/list"})
-@callback
-def ws_manage_list(hass, connection, msg):
+@websocket_api.async_response
+async def ws_manage_list(hass, connection, msg):
     """Alle codes en badges met status, plus de recentste wijzigingen (enkel voor beheerders)."""
     from .manage import MANAGER_KEY
     from .registry import secret
@@ -147,7 +147,19 @@ def ws_manage_list(hass, connection, msg):
     entries.sort(key=lambda e: (e["name"].lower(), e["kind"]))
     doors = [{"id": did, "name": c.door_name} for did, c in sorted(coords.items(), key=lambda x: x[1].door_name.lower())]
     audit = list(reversed(mgr.reg.audit[-200:])) if mgr is not None else []
-    connection.send_result(msg["id"], {"doors": doors, "entries": entries, "audit": audit})
+    # onbekende badges van de laatste 14 dagen (voor Nieuwe badge), zonder badges die al in de lijst staan
+    unknown = []
+    archive = hass.data.get(ARCHIVE_KEY)
+    if archive is not None:
+        known = {(e["secret"] or "").upper() for e in entries if e["kind"] == "badge"}
+        for c in coords.values():
+            known.update((r.get("CardNo") or "").upper() for r in c.cards)
+        try:
+            rows = await hass.async_add_executor_job(archive.unknown_cards, _day_start(hass, 13))
+        except Exception:  # noqa: BLE001  archief is een hulpmiddel, nooit blokkerend
+            rows = []
+        unknown = [r for r in rows if r["card"] not in known]
+    connection.send_result(msg["id"], {"doors": doors, "entries": entries, "audit": audit, "unknown_cards": unknown})
 
 
 ACTIONS = {
@@ -155,6 +167,7 @@ ACTIONS = {
     "add": ("add_code", ("name", "code", "doors"), True),
     "update": ("update_code", ("id", "name", "code", "doors"), True),
     "rename_badge": ("rename_badge", ("id", "name"), True),
+    "add_badge": ("add_badge", ("name", "card", "doors"), True),
     "block": ("block", ("id", "until"), True),
     "unblock": ("unblock", ("id",), True),
     "retire": ("retire", ("id",), True),
@@ -171,6 +184,7 @@ ACTIONS = {
     vol.Optional("entry"): str,     # id van de code of badge ("id" is het berichtnummer van de WebSocket)
     vol.Optional("name"): str,
     vol.Optional("code"): str,
+    vol.Optional("card"): str,
     vol.Optional("doors"): [str],
     vol.Optional("until"): str,
 })

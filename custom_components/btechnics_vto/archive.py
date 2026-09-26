@@ -344,6 +344,18 @@ class AccessArchive:
             "months": [{"month": m, "count": n, "opened": o} for m, (n, o) in sorted(months.items())],
         }
 
+    def unknown_cards(self, since: int, limit: int = 20) -> list:
+        """Badges die sinds `since` aan een lezer werden aangeboden en geweigerd (methode 1, 2 of 3),
+        nieuwste eerst. Om een nieuwe badge te registreren: badge voor de lezer houden en kiezen."""
+        with closing(self._conn()) as c:
+            rows = c.execute(
+                f"SELECT UPPER(card) card, GROUP_CONCAT(DISTINCT door) doors, MAX({TS}) last, COUNT(*) n FROM access "
+                f"WHERE card <> '' AND status <> '1' AND method IN ('1', '2', '3') AND {OWN} AND {TS} >= ? "
+                "GROUP BY UPPER(card) ORDER BY last DESC LIMIT ?",
+                (int(since), int(limit)),
+            ).fetchall()
+        return [{"card": r["card"], "doors": sorted((r["doors"] or "").split(",")), "last": r["last"], "count": r["n"]} for r in rows]
+
     def counts_since(self, start: int) -> dict:
         with closing(self._conn()) as c:
             rows = c.execute(

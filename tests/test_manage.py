@@ -295,3 +295,67 @@ async def test_list_codes_met_badges_en_geblokkeerde(hass, devices):
     beheer = {e["name"] + "/" + e["kind"]: e for e in res["beheer"]}
     assert beheer["Roijin/badge"]["status"] == "active" and beheer["Adriaan/code"]["status"] == "blocked"
     assert beheer["Adriaan/code"]["stored"] == ["cafe"]
+
+
+def badges(dev, card):
+    return [r for r in dev.cards if r["CardNo"] == card]
+
+
+async def test_nieuwe_badge_op_twee_deuren(hass, devices):
+    cafe, kam = devices
+    cafe.add_card_rec("Roijin", "AB12CD34")
+    await setup_two_entries(hass)
+    await hass.async_block_till_done()
+    res = await call(hass, "add_badge", {"name": "Nieuw", "card": "1a2b3c4d", "doors": ["Cafe", "kammerstraat"]}, True)
+    assert set(res["doors"]) == {"cafe", "kammerstraat"}
+    rec = badges(cafe, "1A2B3C4D")[0]
+    assert rec["CardName"] == "Nieuw" and rec["UserName"] == "Nieuw" and rec["Doors"] == [0] and rec["UserID"] == "9999"
+    assert rec["PersonId"] == "2" and rec["ValidDateEnd"] == "0000-00-00 00:00:00"   # zelfde velden als de bestaande badges
+    assert len(badges(kam, "1A2B3C4D")) == 1
+    cid, m = entry(hass, "Nieuw", "badge")
+    assert m["status"] == "active" and set(m["doors"]) == {"cafe", "kammerstraat"} and m["source"] == "home assistant"
+    assert reg(hass).audit[-1]["action"] == "toegevoegd"
+    # dubbel nummer wordt geweigerd, ook met andere naam en kleine letters
+    with pytest.raises(HomeAssistantError, match="al gekend bij Nieuw"):
+        await call(hass, "add_badge", {"name": "Ander", "card": "1a2b3c4d", "doors": ["Cafe"]})
+    import voluptuous as vol
+    with pytest.raises(vol.Invalid):
+        await call(hass, "add_badge", {"name": "X", "card": "ZZ", "doors": ["Cafe"]})
+    # daarna gewoon beheerbaar: blokkeren en terug
+    await call(hass, "block", {"id": cid})
+    assert badges(cafe, "1A2B3C4D") == [] and badges(kam, "1A2B3C4D") == []
+    await call(hass, "unblock", {"id": cid})
+    assert badges(cafe, "1A2B3C4D")[0]["PersonId"] == "2" and len(badges(kam, "1A2B3C4D")) == 1
+
+
+async def test_nieuwe_badge_alles_of_niets(hass, devices):
+    cafe, kam = devices
+    await setup_two_entries(hass)
+    await hass.async_block_till_done()
+    kam.fail_add = True
+    with pytest.raises(HomeAssistantError, match="niet toegevoegd"):
+        await call(hass, "add_badge", {"name": "Nieuw", "card": "1A2B3C4D", "doors": ["Cafe", "Kammerstraat"]})
+    assert badges(cafe, "1A2B3C4D") == [] and badges(kam, "1A2B3C4D") == []       # teruggedraaid op Cafe
+    assert not [m for m in reg(hass).managed.values() if m["name"] == "Nieuw"]
+
+
+async def test_onbekende_badges_uit_logboek(hass, devices, hass_ws_client):
+    from custom_components.btechnics_vto.websocket import ARCHIVE_KEY
+    cafe, _ = devices
+    cafe.add_card_rec("Roijin", "AB12CD34")
+    now = int(dt_util.utcnow().timestamp())
+    cafe.add_log(now - 600, name="", method=1, status=0, card="ffee0011")     # onbekende badge geweigerd
+    cafe.add_log(now - 300, name="Roijin", method=1, status=1, card="AB12CD34")
+    cafe.add_log(now - 200, name="", method=1, status=0, card="AB12CD34")      # gekende badge geweigerd: niet tonen
+    await setup_two_entries(hass)
+    await hass.async_block_till_done()
+    assert hass.data.get(ARCHIVE_KEY) is not None
+    c = await hass_ws_client(hass)
+    await c.send_json_auto_id({"type": f"{DOMAIN}/manage/list"})
+    r = (await c.receive_json())["result"]
+    assert [u["card"] for u in r["unknown_cards"]] == ["FFEE0011"] and r["unknown_cards"][0]["doors"] == ["Cafe"]
+    await c.send_json_auto_id({"type": f"{DOMAIN}/manage/action", "action": "add_badge", "name": "Nieuw", "card": "FFEE0011", "doors": ["cafe"]})
+    assert (await c.receive_json())["success"]
+    await c.send_json_auto_id({"type": f"{DOMAIN}/manage/list"})
+    r = (await c.receive_json())["result"]
+    assert r["unknown_cards"] == [] and any(e["name"] == "Nieuw" and e["kind"] == "badge" for e in r["entries"])

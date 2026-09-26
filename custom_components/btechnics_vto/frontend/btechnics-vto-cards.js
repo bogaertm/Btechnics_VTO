@@ -583,6 +583,7 @@ class VtoCodes extends VtoBase {
         <select id="kind"><option value="all">Codes en badges</option><option value="code">Codes</option><option value="badge">Badges</option></select>
         <button id="toggle" class="btn"><ha-icon icon="mdi:eye" style="--mdc-icon-size:18px"></ha-icon> Codes tonen</button>
         <button id="new" class="btn primary"><ha-icon icon="mdi:plus" style="--mdc-icon-size:18px"></ha-icon> Nieuwe code</button>
+        <button id="newbadge" class="btn primary"><ha-icon icon="mdi:card-account-details-outline" style="--mdc-icon-size:18px"></ha-icon> Nieuwe badge</button>
       </div>
       <div class="tabs" id="tabs"></div>
       <div id="panel" class="panel"></div>
@@ -600,6 +601,7 @@ class VtoCodes extends VtoBase {
       this._render();
     });
     $("new").addEventListener("click", () => this._openForm("add", null));
+    $("newbadge").addEventListener("click", () => this._openForm("addbadge", null));
     this.shadowRoot.addEventListener("click", (e) => {
       const b = e.target.closest("[data-act]");
       if (!b) return;
@@ -607,8 +609,21 @@ class VtoCodes extends VtoBase {
       this._action(b.dataset.act, entry);
     });
     this._load();
+    this._timer = setInterval(() => this._load(), 30000);
+  }
+  disconnectedCallback() {
+    clearInterval(this._timer);
+    this._timer = null;
+  }
+  connectedCallback() {
+    if (this._hass && this._data && !this._timer) {
+      this._load();
+      this._timer = setInterval(() => this._load(), 30000);
+    }
   }
   async _load() {
+    // niet verversen terwijl een formulier open is of een actie loopt: anders verdwijnt de invoer
+    if (this._busy || this._form) return;
     try {
       this._data = await this._ws({ type: "btechnics_vto/manage/list" });
       this._render();
@@ -687,6 +702,7 @@ class VtoCodes extends VtoBase {
     const p = this.shadowRoot.getElementById("panel");
     const doors = this._data.doors;
     this._message("");
+    this._form = { type, entry: e };
     if (type === "confirm") {
       p.innerHTML = `<h3>Bevestigen</h3><div class="row">${text}</div>
         <div class="row"><button class="btn danger" id="ok">Bevestigen</button><button class="btn" id="cancel">Annuleren</button></div>`;
@@ -707,6 +723,26 @@ class VtoCodes extends VtoBase {
         const when = new Date(until);
         if (!manual && !(when > new Date())) return this._message("Het einde moet in de toekomst liggen.");
         this._run({ action: "block", entry: e.id, ...(manual ? {} : { until: when.toISOString() }) }, "Geblokkeerd");
+      });
+    } else if (type === "addbadge") {
+      const unknown = (this._data.unknown_cards || []);
+      p.innerHTML = `<h3>Nieuwe badge</h3>
+        <div class="row"><label>Naam <input id="name" type="text"></label>
+        <label>Badgenummer <input id="card" type="text" maxlength="16" placeholder="bv. 3CFC52F1" style="font-family:monospace"></label></div>
+        ${unknown.length ? `<div class="row">Onlangs geweigerd aan een lezer: ${unknown.map((u) => `<button class="btn" data-card="${esc(u.card)}" title="${esc(u.doors.join(", "))}, ${u.count} keer">${esc(u.card)} <span class="muted">${esc(this._fmt.dateTime.format(new Date(u.last * 1000)))}</span></button>`).join("")}</div>`
+          : `<div class="row muted">Tip: hou de nieuwe badge eerst voor een lezer. Ze wordt geweigerd, en verschijnt hier dan met haar nummer.</div>`}
+        <div class="row">Deuren: ${doors.map((d) => `<label><input type="checkbox" value="${esc(d.id)}"> ${esc(d.name)}</label>`).join("")}</div>
+        <div class="row muted">De badge krijgt dezelfde rechten als de bestaande badges en codes.</div>
+        <div class="row"><button class="btn primary" id="ok">Opslaan</button><button class="btn" id="cancel">Annuleren</button></div>`;
+      p.querySelectorAll("[data-card]").forEach((b) => b.addEventListener("click", () => { p.querySelector("#card").value = b.dataset.card; }));
+      p.querySelector("#ok").addEventListener("click", () => {
+        const name = p.querySelector("#name").value.trim();
+        const card = p.querySelector("#card").value.trim().toUpperCase();
+        const sel = [...p.querySelectorAll("input[type=checkbox]:checked")].map((x) => x.value);
+        if (!name) return this._message("Geef een naam.");
+        if (!/^[0-9A-F]{4,16}$/.test(card)) return this._message("Een badgenummer heeft 4 tot 16 tekens (cijfers en A tot F).");
+        if (!sel.length) return this._message("Kies minstens een deur.");
+        this._run({ action: "add_badge", name, card, doors: sel }, "Badge toegevoegd");
       });
     } else {
       const isNew = type === "add";
@@ -751,6 +787,7 @@ class VtoCodes extends VtoBase {
     const p = this.shadowRoot.getElementById("panel");
     p.classList.remove("on");
     p.innerHTML = "";
+    this._form = null;
   }
   async _run(msg, okText) {
     if (this._busy) return;
