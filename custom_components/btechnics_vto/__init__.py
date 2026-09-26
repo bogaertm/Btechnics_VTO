@@ -716,6 +716,11 @@ def _register_services(hass: HomeAssistant):
         for c in sorted(_all_coords(hass).values(), key=lambda c: c.door_name.lower()):
             try:
                 res = await hass.async_add_executor_job(c.client.camera_probe)
+                if "extra" in res:
+                    try:
+                        res["extra"]["config"] = await hass.async_add_executor_job(c._run, lambda: c.client.probe_config())
+                    except Exception as e:  # noqa: BLE001  diagnose
+                        res["extra"]["config"] = str(e)[:200]
             except Exception as e:  # noqa: BLE001  diagnose
                 res = {"fout": str(e)}
             out.append({"deur": c.door_name, **res})

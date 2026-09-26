@@ -129,6 +129,38 @@ class VTOClient:
                                          "begin": head.decode("latin-1")[:300], "ms": int((_t.monotonic() - t0) * 1000)}
         except Exception as e:  # noqa: BLE001  diagnose
             out["gebeurtenissen"] = {"ok": False, "fout": str(e)[:200]}
+        if not all(v.get("ok") for k, v in out.items() if k != "foto_kanaal_0"):
+            out["extra"] = self._probe_extra()
+        return out
+
+    def _probe_extra(self) -> dict:
+        """Alleen lezen: waarom werkt de camera-CGI niet op dit toestel?"""
+        import socket
+        from urllib.parse import urlparse
+        extra = {}
+        host = urlparse(self.base).hostname
+        for port in (80, 443, 554):
+            try:
+                with socket.create_connection((host, port), timeout=3):
+                    extra[f"poort_{port}"] = "open"
+            except OSError as e:
+                extra[f"poort_{port}"] = f"dicht ({e.__class__.__name__})"
+        if self.base.startswith("https://"):
+            plain = VTOClient("", False, self.user, self._pw)
+            plain.base = "http://" + self.base[len("https://"):]
+            try:
+                plain.snapshot(1)
+                extra["foto_via_http"] = "ok"
+            except Exception as e:  # noqa: BLE001  diagnose
+                extra["foto_via_http"] = str(e)[:120]
+        return extra
+
+    def probe_config(self) -> dict:
+        """Alleen lezen, binnen een bestaande sessie (via de coordinator, onder het deurslot)."""
+        out = {"toestel": self.info()}
+        for name in ("RTSP", "CGI", "Onvif", "WebService", "Encode"):
+            r = self.call("configManager.getConfig", {"name": name})
+            out[name] = json.dumps(r.get("params"))[:300] if r.get("result") else f"geen: {r.get('error')}"
         return out
 
     # ---------- lezen ----------
