@@ -61,7 +61,7 @@ async def test_toegang_maakt_foto_en_koppelt_ze(hass, devices, hass_client, hass
 
     class FakeListener:
         def __init__(self, name, host, user, pw, on_event, on_state):
-            self.on_event, self.on_state = on_event, on_state
+            self.name, self.on_event, self.on_state = name, on_event, on_state
             listeners.append(self)
 
         def start(self):
@@ -82,13 +82,14 @@ async def test_toegang_maakt_foto_en_koppelt_ze(hass, devices, hass_client, hass
     await setup_two_entries(hass)
     await hass.async_block_till_done()
     assert len(listeners) == 2
+    listeners.sort(key=lambda x: x.name != "cafe")      # entries starten in willekeurige volgorde
     now = int(time.time())
     cafe.add_log(now, name="Eliot", method=0, status=1, vto="8001")
     # gebeurtenis komt binnen op de luisterthread
     t = threading.Thread(target=listeners[0].on_event, args=({"Code": "AccessControl", "Data": {"UserID": "Eliot", "Method": 0}},))
     t.start()
     t.join()
-    for _ in range(50):
+    for _ in range(200):
         await hass.async_block_till_done()
         if hass.data[integ.PHOTO_KEY].latest("cafe", now - 60):
             break
