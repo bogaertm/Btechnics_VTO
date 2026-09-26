@@ -137,7 +137,11 @@ async def _async_ensure_resource(hass: HomeAssistant, version: str):
         resources = getattr(lovelace, "resources", None)
         if resources is None or not hasattr(resources, "async_create_item"):
             return   # dashboards in YAML modus: resources worden daar manueel beheerd
-        await resources.async_load()
+        # Enkel laden als het nog niet gebeurde: opnieuw laden leest de schijf, en een wijziging van een andere
+        # integratie die nog niet weggeschreven is (uitgestelde save) gaat dan verloren (vastgesteld 26/09/2026).
+        if not getattr(resources, "loaded", False):
+            await resources.async_load()
+            resources.loaded = True
         base = f"{CARDS_URL}/{CARDS_FILE}"
         url = f"{base}?v={version}"
         mine = [r for r in resources.async_items() if str(r.get("url", "")).split("?")[0] == base]
