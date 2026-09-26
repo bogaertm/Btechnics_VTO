@@ -37,7 +37,7 @@ from .const import (
     LOG_RECENT_COUNT,
     LOG_TAIL,
 )
-from .records import clock_mode, device_order, method_label, new_since, rec_key, rec_time, rec_vto
+from .records import clock_mode, device_order, method_label, new_since, rec_key, rec_room, rec_time, rec_vto
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -227,7 +227,7 @@ class DoorCoordinator(DataUpdateCoordinator):
         ts = int(r["ts"])
         return {
             "door_id": self.door_id, "door": self.door_name, "name": r["name"] or "?",
-            "method": method_label(r["method"]), "opened": r["status"] == "1", "card": r["card"],
+            "method": method_label(r["method"], r.get("room") or ""), "opened": r["status"] == "1", "card": r["card"],
             "time": dt_util.as_local(dt_util.utc_from_timestamp(ts)).isoformat(timespec="seconds"), "ts": ts,
         }
 
@@ -288,7 +288,7 @@ class DoorCoordinator(DataUpdateCoordinator):
         return {
             "door_id": self.door_id, "door": self.door_name,
             "name": r.get("CardName") or r.get("UserID") or "?",
-            "method": method_label(r.get("Method")),
+            "method": method_label(r.get("Method"), rec_room(r)),
             "opened": r.get("Status") == 1, "card": r.get("CardNo", ""),
             "time": local_time.isoformat(timespec="seconds"),
             "ts": ts,
