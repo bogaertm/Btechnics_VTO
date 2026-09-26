@@ -176,6 +176,8 @@ def _defaults(m: dict) -> dict:
     m.setdefault("status", "active")
     m.setdefault("stored", {})
     m.setdefault("until", None)
+    m.setdefault("valid_from", None)
+    m.setdefault("valid_until", None)
     m.setdefault("source", "home assistant")
     return m
 

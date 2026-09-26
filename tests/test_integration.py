@@ -483,7 +483,7 @@ async def test_identieke_records_over_twee_polls(hass, devices, events):
     await poll(hass, "cafe")
     cafe.add_log(T0, name="?", status=0)     # zelfde foute code, zelfde seconde, volgende poll
     await poll(hass, "cafe")
-    assert [e["name"] for e in events] == ["?", "?"]
+    assert [e["name"] for e in events] == ["Foute code", "Foute code"]
 
 
 async def test_meer_dan_1000_toegangen_terwijl_ha_uit_stond(hass, devices, events):
@@ -647,14 +647,14 @@ def own(reg):
 async def test_update_neemt_geen_handmatige_code_over(hass, devices):
     cafe, kam = devices
     await setup_two_entries(hass)
-    cid = (await call(hass, "add_code", {"name": "Jan", "code": "1234", "doors": ["Cafe"]}, True))["id"]
-    hand = kam.add_code_rec("Jan", "5678")    # met de hand aangemaakt op Kammerstraat
+    cid = (await call(hass, "add_code", {"name": "Jan", "code": "123400", "doors": ["Cafe"]}, True))["id"]
+    hand = kam.add_code_rec("Jan", "567800")    # met de hand aangemaakt op Kammerstraat
     with pytest.raises(HomeAssistantError, match="bestaat al"):
-        await call(hass, "update_code", {"id": cid, "code": "5678", "doors": ["Cafe", "Kammerstraat"]}, True)
+        await call(hass, "update_code", {"id": cid, "code": "567800", "doors": ["Cafe", "Kammerstraat"]}, True)
     reg = coord(hass, "cafe").registry
     # de handmatige code werd niet overschreven; sinds v0.4.0 is ze wel beheerbaar en hoort ze,
     # met dezelfde naam en code, bij dezelfde ingang
-    assert any(r["RecNo"] == hand and r["CommonPassword"] == "5678" and r["UserID"] == "Jan" for r in kam.codes)
+    assert any(r["RecNo"] == hand and r["CommonPassword"] == "567800" and r["UserID"] == "Jan" for r in kam.codes)
     assert reg.managed[cid]["doors"].get("kammerstraat") == hand
     assert [c for c in kam.calls if c[0] in ("add", "update", "remove")] == []
 

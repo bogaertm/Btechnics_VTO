@@ -142,10 +142,10 @@ async def test_ws_historiek_filters(hass, devices, hass_ws_client):
     assert (await hist(c, search="ELI"))["total"] == 3                          # hoofdletterongevoelig, beide deuren
     assert (await hist(c, search="ecba62"))["rows"][0]["name"] == "Jan Hoozee"  # op badgenummer
     assert (await hist(c, person="Eliot"))["total"] == 3
-    assert (await hist(c, person="?"))["total"] == 1
+    assert (await hist(c, person="Ongeldige invoer"))["total"] == 1
     assert (await hist(c, search="100%"))["total"] == 0                          # geen SQL-jokers
     ref = await hist(c, status="refused")
-    assert ref["total"] == 1 and ref["rows"][0]["method"] == "ongeldige invoer klavier" and ref["rows"][0]["name"] == "?"
+    assert ref["total"] == 1 and ref["rows"][0]["method"] == "ongeldige invoer klavier" and ref["rows"][0]["name"] == "Ongeldige invoer"
     assert (await hist(c, status="opened"))["total"] == 5
     page = await hist(c, limit=2, offset=2)
     assert page["total"] == 6 and len(page["rows"]) == 2
@@ -559,3 +559,34 @@ async def test_binnenpost_nummer_aangevuld_in_bestaand_archief(hass, devices, ha
     await setup_two_entries(hass)
     c = await hass_ws_client(hass)
     assert [x["method"] for x in (await hist(c))["rows"]] == ["binnenpost 9902"]
+
+
+async def test_rij_zonder_naam_krijgt_label_volgens_methode(hass, devices, hass_ws_client):
+    """Opening via de binnenpost is geen onbekende code (vastgesteld 26/09/2026: 98 zulke rijen)."""
+    cafe, _ = devices
+    t = utc(2026, 10, 2, 8, 0)
+    cafe.add_log(t, name="", method=4, status=1)
+    cafe.log[-1]["RoomNumber"] = "9902"
+    cafe.add_log(t + 60, name="", method=0, status=0)
+    cafe.add_log(t + 120, name="?", method=1, status=0, card="AA11BB22")
+    cafe.add_log(t + 180, name="", method=5, status=1)
+    await setup_two_entries(hass)
+    c = await hass_ws_client(hass)
+    r = await hist(c)
+    names = [x["name"] for x in r["rows"]]
+    assert names == ["Exitknop", "Onbekende badge", "Foute code", "Binnenpost 9902"]
+    assert (await hist(c, person="Binnenpost 9902"))["total"] == 1
+    assert "?" not in {p["name"] for p in r["people"]}
+    last = coord(hass, "cafe").last_unlock
+    assert last["name"] == "Exitknop"
+
+
+def test_who_labels():
+    from custom_components.btechnics_vto.records import who
+    assert who("Jan", 0, True) == "Jan"
+    assert who("?", 4, True, "9901") == "Binnenpost 9901"
+    assert who("", 4, True) == "Binnenpost"
+    assert who("", 0, False) == "Foute code"
+    assert who("", 0, True) == "Onbekende code"
+    assert who("", 2, False) == "Onbekende badge"
+    assert who("", 20, False) == "Ongeldige invoer"

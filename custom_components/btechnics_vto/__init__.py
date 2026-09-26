@@ -23,7 +23,7 @@ from .const import ARCHIVE_FILE, CONF_DOORS, CONF_HOST, CONF_HTTPS, CONF_PASSWOR
 from .coordinator import API_ERRORS, DoorCoordinator
 from .camera import PHOTO_DIR, DoorCamera, PhotoStore
 from .dhip import EventListener
-from .manage import MANAGER_KEY, Manager
+from .manage import validity_txt, MANAGER_KEY, Manager
 from .records import rec_key
 from .registry import CodeRegistry
 from .websocket import ARCHIVE_KEY
@@ -31,7 +31,7 @@ from .websocket import async_register as async_register_websocket
 
 _LOGGER = logging.getLogger(__name__)
 PLATFORMS = ["sensor"]
-SERVICES = ["add_code", "update_code", "remove_code", "refresh", "list_codes", "list_log", "device_time", "sync_clock",
+SERVICES = ["add_code", "set_validity", "update_code", "remove_code", "refresh", "list_codes", "list_log", "device_time", "sync_clock",
             "block", "unblock", "retire", "restore", "forget", "rename_badge", "add_badge", "camera_probe"]
 
 # Eén gedeeld register voor ALLE config entries en voor de hele levensduur van Home Assistant:
@@ -47,7 +47,7 @@ EVENTS_ENABLED = True
 CARDS_URL = "/btechnics_vto_static"
 CARDS_FILE = "btechnics-vto-cards.js"
 
-CODE_SCHEMA = vol.All(cv.string, vol.Match(r"^\d{4,8}$", msg="code moet 4 tot 8 cijfers zijn"))
+CODE_SCHEMA = vol.All(cv.string, vol.Match(r"^\d{6,8}$", msg="code moet 6 tot 8 cijfers zijn"))
 
 
 class CodeExists(VTOError):
@@ -353,6 +353,27 @@ def _locate(codes, name, code):
     return int(hits[0]["RecNo"]) if len(hits) == 1 else None
 
 
+def _as_utc(value):
+    if value is None:
+        return None
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=dt_util.get_default_time_zone())
+    return dt_util.as_utc(value)
+
+
+def _validity(data, allow_past_start: bool = False):
+    """(begin, einde) in UTC uit valid_from en valid_until; een begin dat al voorbij is telt als geen begin."""
+    vfrom, vuntil = _as_utc(data.get("valid_from")), _as_utc(data.get("valid_until"))
+    now = dt_util.utcnow()
+    if vuntil is not None and vuntil <= now:
+        raise HomeAssistantError("het einde van de geldigheid ligt in het verleden")
+    if vfrom is not None and vuntil is not None and vuntil <= vfrom:
+        raise HomeAssistantError("het einde van de geldigheid moet na het begin liggen")
+    if vfrom is not None and vfrom <= now:
+        vfrom = None
+    return vfrom, vuntil
+
+
 def _register_services(hass: HomeAssistant):
     if hass.services.has_service(DOMAIN, "add_code"):
         return
@@ -409,6 +430,7 @@ def _register_services(hass: HomeAssistant):
         if not name:
             raise HomeAssistantError("naam mag niet leeg zijn")
         door_ids = _door_ids(coords, call.data["doors"])
+        vfrom, vuntil = _validity(call.data)
         _check_not_stored(reg, code)
         # eerste controle op alle gekozen deuren vóór er iets geschreven wordt
         for did in door_ids:
@@ -416,6 +438,17 @@ def _register_services(hass: HomeAssistant):
             for r in c.codes:
                 if r.get("CommonPassword") == code:
                     raise HomeAssistantError(f"code bestaat al op {c.door_name} ({(r.get('UserID') or '').strip()})")
+        user = await mgr.user_name(call.context)
+        if vfrom is not None:
+            # begint later: nu niets op de toestellen, de planner zet de code erop bij het begin
+            cid = reg._new(kind="code", name=name, secret=code, doors={}, source="home assistant")
+            m = reg.managed[cid]
+            m.update(status="blocked", until=vfrom.isoformat(), valid_from=vfrom.isoformat(),
+                     valid_until=vuntil.isoformat() if vuntil else None,
+                     stored={did: {"UserID": name, "CommonPassword": code} for did in door_ids})
+            reg.log(user, "toegevoegd", m, mgr.door_names(door_ids), validity_txt(m))
+            await reg.save()
+            return {"id": cid, "doors": {}, "scheduled": True}
         doors = {}
         attempted = []
         try:
@@ -459,7 +492,8 @@ def _register_services(hass: HomeAssistant):
         finally:
             for did in door_ids:
                 await coords[did].async_refresh_codes()
-        reg.log(await mgr.user_name(call.context), "toegevoegd", reg.managed[cid], mgr.door_names(doors))
+        reg.managed[cid]["valid_until"] = vuntil.isoformat() if vuntil else None
+        reg.log(user, "toegevoegd", reg.managed[cid], mgr.door_names(doors), validity_txt(reg.managed[cid]) if vuntil else "")
         await reg.save()
         return {"id": cid, "doors": doors}
 
@@ -661,7 +695,8 @@ def _register_services(hass: HomeAssistant):
                 if row:
                     row["managed"], row["id"] = True, cid
             entries.append({"id": cid, "kind": m.get("kind"), "name": m.get("name"), "status": m.get("status"),
-                            "until": m.get("until"), "doors": sorted(m.get("doors", {})), "stored": sorted(m.get("stored", {}))})
+                            "until": m.get("until"), "valid_from": m.get("valid_from"), "valid_until": m.get("valid_until"),
+                            "doors": sorted(m.get("doors", {})), "stored": sorted(m.get("stored", {}))})
         out = {"codes": sorted(rows.values(), key=lambda x: x["name"].lower()),
                "beheer": sorted(entries, key=lambda x: (x["name"] or "").lower()), "registry": reg.export()}
         if call.data.get("raw"):
@@ -732,7 +767,8 @@ def _register_services(hass: HomeAssistant):
     # Alles wat codes, badges of het logboek leest of wijzigt: enkel voor beheerders.
     async_register_admin_service(hass, DOMAIN, "add_code", add_code, vol.Schema({
         vol.Required("name"): cv.string, vol.Required("code"): CODE_SCHEMA,
-        vol.Required("doors"): vol.All(cv.ensure_list, [cv.string])}), supports_response=SupportsResponse.OPTIONAL)
+        vol.Required("doors"): vol.All(cv.ensure_list, [cv.string]),
+        vol.Optional("valid_from"): cv.datetime, vol.Optional("valid_until"): cv.datetime}), supports_response=SupportsResponse.OPTIONAL)
     async_register_admin_service(hass, DOMAIN, "update_code", update_code, vol.Schema({
         vol.Required("id"): cv.string, vol.Optional("name"): cv.string, vol.Optional("code"): CODE_SCHEMA,
         vol.Optional("doors"): vol.All(cv.ensure_list, [cv.string])}), supports_response=SupportsResponse.OPTIONAL)
@@ -748,6 +784,11 @@ def _register_services(hass: HomeAssistant):
         if value <= dt_util.utcnow():
             raise HomeAssistantError("het einde van de blokkering ligt in het verleden")
         return value
+
+    async def set_validity(call: ServiceCall):
+        vfrom, vuntil = _validity(call.data, allow_past_start=True)
+        user = await mgr.user_name(call.context)
+        return await mgr.guarded(mgr.set_validity, call.data["id"], vfrom, vuntil, user)
 
     async def block(call: ServiceCall):
         until = _until(call.data.get("until"))
@@ -787,6 +828,9 @@ def _register_services(hass: HomeAssistant):
         user = await mgr.user_name(call.context)
         return await mgr.guarded(mgr.add_badge, name, call.data["card"].upper(), door_ids, user)
 
+    async_register_admin_service(hass, DOMAIN, "set_validity", set_validity, vol.Schema({
+        vol.Required("id"): cv.string, vol.Optional("valid_from"): vol.Any(None, cv.datetime),
+        vol.Optional("valid_until"): vol.Any(None, cv.datetime)}), supports_response=SupportsResponse.OPTIONAL)
     async_register_admin_service(hass, DOMAIN, "add_badge", add_badge, vol.Schema({
         vol.Required("name"): cv.string,
         vol.Required("card"): vol.All(cv.string, vol.Match(r"^[0-9A-Fa-f]{4,16}$", msg="badgenummer: 4 tot 16 tekens 0-9 en A-F")),

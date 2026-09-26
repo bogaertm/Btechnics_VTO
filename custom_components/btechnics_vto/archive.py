@@ -53,8 +53,15 @@ TS = "COALESCE(t, ts)"
 OWN = ("NOT EXISTS (SELECT 1 FROM door_vto d WHERE d.door_id = access.door_id "
        "AND access.vto <> '' AND d.vto <> access.vto)")
 
-# Onbekende code: het toestel bewaart soms een lege naam, soms "?". Beide tonen als "?".
-NAME = "(CASE WHEN name = '' THEN '?' ELSE name END)"
+# Rij zonder naam (het toestel bewaart dan een lege naam of "?"): een label volgens de methode, zodat
+# een opening via de binnenpost niet als onbekende code verschijnt. Zelfde regels als records.who().
+NAME = ("(CASE WHEN name NOT IN ('', '?') THEN name "
+        "WHEN method = '4' THEN TRIM('Binnenpost ' || COALESCE(room, '')) "
+        "WHEN method = '5' THEN 'Exitknop' "
+        "WHEN method = '20' THEN 'Ongeldige invoer' "
+        "WHEN method IN ('1', '2', '3') THEN 'Onbekende badge' "
+        "WHEN method = '0' AND status <> '1' THEN 'Foute code' "
+        "ELSE 'Onbekende code' END)")
 
 MAX_ROWS = 50000
 

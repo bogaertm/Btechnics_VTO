@@ -102,6 +102,28 @@ def rec_room(r: dict) -> str:
     return str(r.get("RoomNumber") or "").strip()
 
 
+def who(name, method, opened: bool, room: str = "") -> str:
+    """Naam voor een toegang; zonder naam een label volgens de methode (zelfde regels als het archief)."""
+    name = (name or "").strip()
+    if name and name != "?":
+        return name
+    try:
+        m = int(method)
+    except (TypeError, ValueError):
+        m = None
+    if m == METHOD_INDOOR:
+        return f"Binnenpost {room}".strip()
+    if m == 5:
+        return "Exitknop"
+    if m == 20:
+        return "Ongeldige invoer"
+    if m in (1, 2, 3):
+        return "Onbekende badge"
+    if m == 0 and not opened:
+        return "Foute code"
+    return "Onbekende code"
+
+
 def method_label(m, room: str = "") -> str:
     try:
         label = METHODS.get(int(m), f"onbekend ({m})")

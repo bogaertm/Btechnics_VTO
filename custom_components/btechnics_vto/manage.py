@@ -206,7 +206,7 @@ class Manager:
 
     # ---------- acties ----------
 
-    async def block(self, cid: str, until, user: str, retire: bool = False):
+    async def block(self, cid: str, until, user: str, retire: bool = False, reason: str = ""):
         """Van alle toestellen halen en bewaren. until: datetime (UTC) of None (tot deblokkeren)."""
         m = self.entry(cid)
         if m["status"] == "retired" and not m["doors"]:
@@ -267,7 +267,7 @@ class Manager:
             m["until"] = None if retire or until is None else until.isoformat()
         self.reg.touch(m)
         action = "uit dienst" if retire else "geblokkeerd"
-        detail = "" if retire else _until_txt(until)
+        detail = reason or ("" if retire else _until_txt(until))
         if errors:
             detail = (detail + "; " if detail else "") + "niet gelukt: " + "; ".join(errors)
         self.reg.log(user, action, m, self.door_names(done), detail)
@@ -285,6 +285,10 @@ class Manager:
     async def unblock(self, cid: str, user: str, action: str = "gedeblokkeerd", quiet: bool = False):
         """Alle bewaarde records terug op de toestellen zetten."""
         m = self.entry(cid)
+        vu = dt_util.parse_datetime(m["valid_until"]) if m.get("valid_until") else None
+        if vu is not None and vu <= dt_util.utcnow():
+            m["valid_until"] = None     # herstellen na het einde van de geldigheid: zonder einde, anders meteen weer uit dienst
+        m["valid_from"] = None          # wat nu op het toestel komt, is vanaf nu geldig
         if not m["stored"]:
             if m["status"] == "active":
                 raise HomeAssistantError(f"'{m['name']}' is niet geblokkeerd")
@@ -444,6 +448,35 @@ class Manager:
         await self.reg.save()
         return {"id": cid, "doors": doors}
 
+    async def set_validity(self, cid: str, vfrom, vuntil, user: str):
+        """Geldigheid van een code of badge (datetimes in UTC of None). De toestellen kennen geen
+        geldigheid voor codes: voor het begin staat de code niet op het toestel (geblokkeerd tot het
+        begin, de planner zet ze erop), na het einde haalt de planner ze eraf (uit dienst, herstelbaar)."""
+        m = self.entry(cid)
+        now = dt_util.utcnow()
+        if vuntil is not None and vuntil <= now:
+            raise HomeAssistantError("het einde van de geldigheid ligt in het verleden")
+        if vfrom is not None and vuntil is not None and vuntil <= vfrom:
+            raise HomeAssistantError("het einde van de geldigheid moet na het begin liggen")
+        if m["status"] == "retired":
+            raise HomeAssistantError(f"'{m['name']}' is uit dienst: eerst herstellen")
+        old_from = m.get("valid_from")
+        waiting = m["status"] == "blocked" and old_from is not None and m.get("until") == old_from
+        m["valid_from"] = vfrom.isoformat() if vfrom and vfrom > now else None
+        m["valid_until"] = vuntil.isoformat() if vuntil else None
+        self.reg.touch(m)
+        self.reg.log(user, "geldigheid ingesteld", m, self.door_names(list(m["doors"]) + list(m["stored"])), validity_txt(m))
+        await self.reg.save()
+        if m["valid_from"]:
+            if m["status"] == "active":
+                await self.block(cid, vfrom, user, reason="wacht op het begin van de geldigheid, " + _until_txt(vfrom))
+            elif waiting:
+                m["until"] = m["valid_from"]
+                await self.reg.save()
+        elif waiting:
+            await self.unblock(cid, user, "geldig vanaf nu")
+        return {"id": cid, "status": m["status"]}
+
     async def forget(self, cid: str, user: str):
         """Een ingang die uit dienst is definitief uit de lijst halen (de toegangshistoriek blijft)."""
         m = self.entry(cid)
@@ -469,13 +502,27 @@ class Manager:
     async def _tick(self, _now=None):
         now = dt_util.utcnow()
         for cid, m in list(self.reg.managed.items()):
+            vu = dt_util.parse_datetime(m["valid_until"]) if m.get("valid_until") else None
+            if vu is not None and vu <= now and m.get("status") != "retired":
+                key = "einde_" + cid
+                first = key not in self._warned
+                try:
+                    await self.guarded(self.block, cid, None, "planner", True,
+                                       "einde geldigheid " + dt_util.as_local(vu).strftime("%d/%m/%Y %H:%M"))
+                    self._warned.discard(key)
+                except HomeAssistantError as e:
+                    if first:
+                        self._warned.add(key)
+                        _LOGGER.error("Code %s na het einde van de geldigheid uit dienst halen mislukt, nieuwe poging elke minuut: %s", m.get("name"), e)
+                continue
             until = dt_util.parse_datetime(m["until"]) if m.get("status") == "blocked" and m.get("until") else None
             if until is None or until > now:
                 continue
             first = cid not in self._warned
             try:
                 # eerste poging met melding; daarna stil elke minuut opnieuw, tot het lukt
-                await self.guarded(self.unblock, cid, "planner", "automatisch gedeblokkeerd", not first)
+                start = bool(m.get("valid_from")) and m.get("until") == m.get("valid_from")
+                await self.guarded(self.unblock, cid, "planner", "begin geldigheid" if start else "automatisch gedeblokkeerd", not first)
                 if not first:
                     self.notify(f"'{m.get('name')}' is alsnog automatisch gedeblokkeerd.", cid)
                 self._warned.discard(cid)
@@ -483,6 +530,19 @@ class Manager:
                 if first:
                     self._warned.add(cid)
                     _LOGGER.error("Automatisch deblokkeren van %s mislukt, nieuwe poging elke minuut: %s", m.get("name"), e)
+
+
+def validity_txt(m: dict) -> str:
+    def t(v):
+        return dt_util.as_local(dt_util.parse_datetime(v)).strftime("%d/%m/%Y %H:%M")
+    vf, vu = m.get("valid_from"), m.get("valid_until")
+    if vf and vu:
+        return f"geldig van {t(vf)} tot {t(vu)}"
+    if vf:
+        return f"geldig vanaf {t(vf)}"
+    if vu:
+        return f"geldig tot {t(vu)}"
+    return "altijd geldig"
 
 
 def _until_txt(until) -> str:

@@ -222,8 +222,8 @@ async def test_websocket_beheer(hass, devices, hass_ws_client, hass_read_only_ac
     assert r["audit"][0]["action"] == "geblokkeerd" and r["audit"][0]["user"]
     res = await ws(type=f"{DOMAIN}/manage/action", action="add", name="Nieuw", code="12", doors=["Cafe"])
     assert not res["success"]                                             # code te kort: foutmelding, niets geschreven
-    res = await ws(type=f"{DOMAIN}/manage/action", action="add", name="Nieuw", code="4455", doors=["cafe"])
-    assert res["success"] and len(on(cafe, "Nieuw", "4455")) == 1
+    res = await ws(type=f"{DOMAIN}/manage/action", action="add", name="Nieuw", code="445566", doors=["cafe"])
+    assert res["success"] and len(on(cafe, "Nieuw", "445566")) == 1
     ro = await hass_ws_client(hass, hass_read_only_access_token)
     await ro.send_json_auto_id({"type": f"{DOMAIN}/manage/list"})
     assert not (await ro.receive_json())["success"]
@@ -419,3 +419,75 @@ async def test_camera_probe_enkel_beheerders(hass, devices, hass_read_only_user,
     with pytest.raises(Unauthorized):
         await hass.services.async_call(DOMAIN, "camera_probe", {}, blocking=True, return_response=True,
                                        context=Context(user_id=hass_read_only_user.id))
+
+
+# ---------------------------------------------------------------- geldigheid (v0.6.0)
+
+async def test_code_met_begin_later_staat_pas_dan_op_het_toestel(hass, devices):
+    cafe, kam = devices
+    await setup_two_entries(hass)
+    await hass.async_block_till_done()
+    start = dt_util.now() + timedelta(hours=3)
+    end = start + timedelta(days=2)
+    res = await call(hass, "add_code", {"name": "Gast", "code": "246810", "doors": ["Cafe", "Kammerstraat"],
+                                        "valid_from": start.replace(tzinfo=None), "valid_until": end.replace(tzinfo=None)}, True)
+    cid = res["id"]
+    assert res["scheduled"] and on(cafe, "Gast") == [] and on(kam, "Gast") == []   # nog nergens actief
+    m = reg(hass).managed[cid]
+    assert m["status"] == "blocked" and m["until"] == m["valid_from"] and set(m["stored"]) == {"cafe", "kammerstraat"}
+    await coord(hass, "cafe").async_refresh_codes()                                  # gelijkzetten laat de planning staan
+    assert cid in reg(hass).managed
+    mgr = hass.data[MANAGER_KEY]
+    await mgr._tick()
+    assert on(cafe, "Gast") == []
+    m["until"] = m["valid_from"] = (dt_util.utcnow() - timedelta(seconds=1)).isoformat()
+    await mgr._tick()
+    m = reg(hass).managed[cid]
+    assert m["status"] == "active" and len(on(cafe, "Gast", "246810")) == 1 and len(on(kam, "Gast", "246810")) == 1
+    assert m["valid_from"] is None and m["valid_until"] is not None
+    assert reg(hass).audit[-1]["action"] == "begin geldigheid"
+    # einde: automatisch uit dienst, bewaard en herstelbaar
+    m["valid_until"] = (dt_util.utcnow() - timedelta(seconds=1)).isoformat()
+    await mgr._tick()
+    m = reg(hass).managed[cid]
+    assert m["status"] == "retired" and on(cafe, "Gast") == [] and set(m["stored"]) == {"cafe", "kammerstraat"}
+    assert reg(hass).audit[-1]["user"] == "planner" and "einde geldigheid" in reg(hass).audit[-1]["detail"]
+    await call(hass, "restore", {"id": cid})
+    m = reg(hass).managed[cid]
+    assert m["status"] == "active" and m["valid_until"] is None and len(on(cafe, "Gast")) == 1
+    await mgr._tick()
+    assert reg(hass).managed[cid]["status"] == "active"                              # niet meteen weer uit dienst
+
+
+async def test_geldigheid_van_bestaande_code(hass, devices):
+    cafe, _ = devices
+    await setup_two_entries(hass)
+    await hass.async_block_till_done()
+    cid, _ = entry(hass, "Adriaan")
+    end = dt_util.now() + timedelta(days=1)
+    await call(hass, "set_validity", {"id": cid, "valid_until": end.replace(tzinfo=None)}, True)
+    m = reg(hass).managed[cid]
+    assert m["status"] == "active" and m["valid_until"] and len(on(cafe, "Adriaan")) == 1
+    assert reg(hass).audit[-1]["action"] == "geldigheid ingesteld" and "geldig tot" in reg(hass).audit[-1]["detail"]
+    # begin later: van het toestel tot het begin
+    start = dt_util.now() + timedelta(hours=2)
+    await call(hass, "set_validity", {"id": cid, "valid_from": start.replace(tzinfo=None), "valid_until": end.replace(tzinfo=None)}, True)
+    m = reg(hass).managed[cid]
+    assert m["status"] == "blocked" and m["until"] == m["valid_from"] and on(cafe, "Adriaan") == []
+    # begin wissen: meteen terug actief
+    await call(hass, "set_validity", {"id": cid, "valid_until": end.replace(tzinfo=None)}, True)
+    m = reg(hass).managed[cid]
+    assert m["status"] == "active" and m["valid_from"] is None and len(on(cafe, "Adriaan")) == 1
+    with pytest.raises(HomeAssistantError, match="verleden"):
+        await call(hass, "set_validity", {"id": cid, "valid_until": (dt_util.now() - timedelta(minutes=1)).replace(tzinfo=None)}, True)
+    with pytest.raises(HomeAssistantError, match="na het begin"):
+        await call(hass, "set_validity", {"id": cid, "valid_from": end.replace(tzinfo=None), "valid_until": start.replace(tzinfo=None)}, True)
+
+
+async def test_code_moet_6_tot_8_cijfers(hass, devices):
+    import voluptuous as vol
+    await setup_two_entries(hass)
+    for bad in ("1234", "12345", "123456789", "12a456"):
+        with pytest.raises(vol.Invalid):
+            await call(hass, "add_code", {"name": "X", "code": bad, "doors": ["Cafe"]}, True)
+    assert (await call(hass, "add_code", {"name": "X", "code": "12345678", "doors": ["Cafe"]}, True))["id"]

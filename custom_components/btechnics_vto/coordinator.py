@@ -37,7 +37,7 @@ from .const import (
     LOG_RECENT_COUNT,
     LOG_TAIL,
 )
-from .records import clock_mode, device_order, method_label, new_since, rec_key, rec_room, rec_time, rec_vto
+from .records import clock_mode, device_order, method_label, new_since, rec_key, rec_room, rec_time, rec_vto, who
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -230,7 +230,8 @@ class DoorCoordinator(DataUpdateCoordinator):
     def _fmt_row(self, r):
         ts = int(r["ts"])
         return {
-            "door_id": self.door_id, "door": self.door_name, "name": r["name"] or "?",
+            "door_id": self.door_id, "door": self.door_name,
+            "name": who(r["name"], r["method"], r["status"] == "1", r.get("room") or ""),
             "method": method_label(r["method"], r.get("room") or ""), "opened": r["status"] == "1", "card": r["card"],
             "time": dt_util.as_local(dt_util.utc_from_timestamp(ts)).isoformat(timespec="seconds"), "ts": ts,
         }
@@ -291,7 +292,7 @@ class DoorCoordinator(DataUpdateCoordinator):
         local_time = dt_util.as_local(dt_util.utc_from_timestamp(ts))
         return {
             "door_id": self.door_id, "door": self.door_name,
-            "name": r.get("CardName") or r.get("UserID") or "?",
+            "name": who(r.get("CardName") or r.get("UserID"), r.get("Method"), r.get("Status") == 1, rec_room(r)),
             "method": method_label(r.get("Method"), rec_room(r)),
             "opened": r.get("Status") == 1, "card": r.get("CardNo", ""),
             "time": local_time.isoformat(timespec="seconds"),

@@ -11,6 +11,9 @@ const MONTHS = ["jan", "feb", "mrt", "apr", "mei", "jun", "jul", "aug", "sep", "
 
 const esc = (s) =>
   String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
+// Label voor een toegang zonder naam (door de integratie gezet volgens de methode), geen persoon.
+const LABEL_RE = /^(Binnenpost( \d+)?|Exitknop|Ongeldige invoer|Onbekende badge|Foute code|Onbekende code)$/;
+const isLabel = (n) => LABEL_RE.test(String(n || ""));
 
 function errText(e) {
   if (e && typeof e === "object" && e.message) return e.message;
@@ -251,7 +254,7 @@ class VtoOverzicht extends VtoBase {
       : (u ? lastTxt.charAt(0).toUpperCase() + lastTxt.slice(1) : "");
     const recent = (d.recent || []).slice(0, 6).map((r) => `<tr>
         <td class="muted" style="white-space:nowrap">${f.short.format(new Date(r.ts * 1000))}</td>
-        <td>${r.name === "?" ? '<span class="muted">onbekende code</span>' : esc(r.name)}</td>
+        <td>${r.name === "?" ? '<span class="muted">onbekende code</span>' : isLabel(r.name) ? `<span class="muted">${esc(r.name)}</span>` : esc(r.name)}</td>
         <td class="muted">${esc(r.method)}</td>
         <td><span class="status"><span class="dot ${r.opened ? "open" : "refused"}"></span>${r.opened ? "Geopend" : "Geweigerd"}${photoBtn(this._hass, r, `${r.name === "?" ? "Onbekende code" : r.name}, ${d.name}, ${f.dateTime.format(new Date(r.ts * 1000))}`)}</span></td></tr>`).join("");
     const thumb = u && u.photo && isAdmin(this._hass)
@@ -438,7 +441,7 @@ class VtoToegang extends VtoBase {
       if (seq !== this._seq) return; // er kwam intussen een nieuwere zoekopdracht
       this._res = res;
       if (!this._state.search && this._state.person === null) {
-        this._names = res.people.map((p) => p.name).filter((n) => n !== "?");
+        this._names = res.people.map((p) => p.name).filter((n) => n !== "?" && !isLabel(n));
         this.shadowRoot.getElementById("names").innerHTML = this._names.map((n) => `<option value="${esc(n)}">`).join("");
       }
       this._render();
@@ -479,7 +482,7 @@ class VtoToegang extends VtoBase {
       <div class="kpi"><div class="v">${r.total.toLocaleString("nl-BE")}</div><div class="l">Toegangen</div></div>
       <div class="kpi"><div class="v">${r.opened.toLocaleString("nl-BE")}</div><div class="l"><span class="dot open"></span>Geopend</div></div>
       <div class="kpi"><div class="v">${r.refused.toLocaleString("nl-BE")}</div><div class="l"><span class="dot refused"></span>Geweigerd</div></div>
-      <div class="kpi"><div class="v">${r.people.filter((p) => p.name !== "?").length.toLocaleString("nl-BE")}</div><div class="l">Personen</div></div>`;
+      <div class="kpi"><div class="v">${r.people.filter((p) => p.name !== "?" && !isLabel(p.name)).length.toLocaleString("nl-BE")}</div><div class="l">Personen</div></div>`;
     this._chart();
     this._renderOut();
     const a = this._archive || {};
@@ -561,7 +564,7 @@ class VtoToegang extends VtoBase {
       if (!r.people.length) { out.innerHTML = `<div class="empty">Geen toegangen gevonden</div>`; return; }
       out.innerHTML = `<table><thead><tr><th>Persoon</th><th class="num">Toegangen</th><th class="num">Geopend</th><th class="num">Geweigerd</th><th>Laatst</th><th>Deuren</th></tr></thead><tbody>
         ${r.people.map((p) => `<tr>
-          <td><button class="link" data-person="${esc(p.name)}">${p.name === "?" ? "onbekende code" : esc(p.name)}</button></td>
+          <td><button class="link${isLabel(p.name) ? " muted" : ""}" data-person="${esc(p.name)}">${p.name === "?" ? "onbekende code" : esc(p.name)}</button></td>
           <td class="num">${p.count}</td><td class="num">${p.opened}</td><td class="num">${p.refused}</td>
           <td class="when">${f.dateTime.format(new Date(p.last * 1000))}</td><td class="muted">${p.doors.map(esc).join(", ")}</td></tr>`).join("")}
         </tbody></table>`;
@@ -571,7 +574,7 @@ class VtoToegang extends VtoBase {
     out.innerHTML = `<table><thead><tr><th>Datum</th><th>Tijd</th><th>Deur</th><th>Persoon</th><th>Methode</th><th>Status</th></tr></thead><tbody>
       ${r.rows.map((x) => { const d = new Date(x.ts * 1000); return `<tr>
         <td class="when">${f.date.format(d)}</td><td class="when">${f.time.format(d)}</td><td>${esc(x.door)}</td>
-        <td>${x.name === "?" ? '<button class="link muted" data-person="?">onbekende code</button>' : `<button class="link" data-person="${esc(x.name)}">${esc(x.name)}</button>`}</td>
+        <td>${x.name === "?" ? '<button class="link muted" data-person="?">onbekende code</button>' : `<button class="link${isLabel(x.name) ? " muted" : ""}" data-person="${esc(x.name)}">${esc(x.name)}</button>`}</td>
         <td class="muted">${esc(x.method)}${x.card ? ` <span class="mono">${esc(x.card)}</span>` : ""}</td>
         <td><span class="status"><span class="dot ${x.opened ? "open" : "refused"}"></span>${x.opened ? "Geopend" : "Geweigerd"}${photoBtn(this._hass, x, `${x.name === "?" ? "Onbekende code" : x.name}, ${x.door}, ${f.dateTime.format(d)}`)}</span></td></tr>`; }).join("")}
       </tbody></table>`;
@@ -673,6 +676,15 @@ class VtoCodes extends VtoBase {
       .hist .head { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
       .hist td { font-size: 0.9rem; }
       .more { display: flex; justify-content: center; padding: 12px 0 0; }
+      .valid { font-size: 0.8rem; color: var(--secondary-text-color); margin-top: 2px; }
+      .share textarea { width: 100%; box-sizing: border-box; min-height: 150px; font: inherit; padding: 8px; border-radius: 8px;
+        border: 1px solid var(--divider-color); background: var(--card-background-color, #fff); color: var(--primary-text-color); }
+      .share .sendbar { display: flex; flex-wrap: wrap; gap: 8px; }
+      .share a.btn { text-decoration: none; display: inline-flex; align-items: center; gap: 6px; font: inherit; color: var(--primary-text-color);
+        background: var(--secondary-background-color); border: 1px solid var(--divider-color); border-radius: 8px; padding: 8px 12px;
+        min-height: 40px; box-sizing: border-box; cursor: pointer; }
+      .share a.btn:hover { border-color: var(--primary-color); }
+      .share a.btn.primary { background: var(--primary-color); color: var(--text-primary-color, #fff); border-color: var(--primary-color); }
       @media (max-width: 640px) {
         table.list thead { display: none; }
         table.list, table.list tbody, table.list tr, table.list td { display: block; width: auto; }
@@ -789,8 +801,12 @@ class VtoCodes extends VtoBase {
     el.className = "msg " + (ok ? "ok" : "error");
     el.textContent = text || "";
   }
+  _waiting(e) {
+    return e.status === "blocked" && e.valid_from && e.until === e.valid_from;
+  }
   _statusText(e) {
     if (e.status === "active") return "Actief";
+    if (this._waiting(e)) return "Wacht op begin: " + this._fmt.dateTime.format(new Date(e.valid_from));
     if (e.status === "retired") return "Uit dienst";
     if (!e.until) return "Geblokkeerd tot deblokkeren";
     return "Geblokkeerd tot " + this._fmt.dateTime.format(new Date(e.until));
@@ -813,7 +829,9 @@ class VtoCodes extends VtoBase {
       : (this._show ? `<span class="mono">${esc(e.secret)}</span>` : `<span class="hidden">&bull;&bull;&bull;&bull;&bull;&bull;</span>`);
     const acts = (e) => {
       const b = (act, label, cls) => `<button class="btn ${cls || ""}" data-act="${act}" data-id="${esc(e.id)}">${label}</button>`;
-      if (e.status === "active") return b("edit", "Aanpassen") + b("block", "Blokkeren") + b("retire", "Uit dienst", "danger");
+      const share = e.kind === "code" ? b("share", "Delen") : "";
+      if (e.status === "active") return share + b("edit", "Aanpassen") + b("block", "Blokkeren") + b("retire", "Uit dienst", "danger");
+      if (this._waiting(e)) return share + b("edit", "Aanpassen") + b("unblock", "Nu al activeren") + b("retire", "Uit dienst", "danger");
       if (e.status === "blocked") return b("unblock", "Deblokkeren", "primary") + b("block", "Einde aanpassen") + b("edit", "Aanpassen") + b("retire", "Uit dienst", "danger");
       return b("restore", "Herstellen", "primary") + b("edit", "Aanpassen") + b("forget", "Definitief verwijderen", "danger");
     };
@@ -828,6 +846,7 @@ class VtoCodes extends VtoBase {
           <td>${sec(e)}</td>
           <td>${e.doors.map((d) => `<span class="chip">${esc(d.name)}</span>`).join("")}${e.stored.map((d) => `<span class="chip stored" title="bewaard, niet op het toestel">${esc(d.name)}</span>`).join("")}</td>
           <td><span class="status">${dot(e)}${esc(this._statusText(e))}</span>
+            ${e.valid_until && e.status !== "retired" ? `<div class="valid">Geldig tot ${esc(this._fmt.dateTime.format(new Date(e.valid_until)))}</div>` : ""}
             ${e.status !== "active" && e.doors.length ? `<div class="warn">Nog actief op ${e.doors.map((d) => esc(d.name)).join(", ")}</div>` : ""}</td>
           <td><div class="acts">${acts(e)}</div></td></tr>`).join("")}
         </tbody></table>`;
@@ -844,11 +863,84 @@ class VtoCodes extends VtoBase {
   }
   _action(act, e) {
     if (act === "edit" || act === "block") return this._openForm(act, e);
+    if (act === "share") return this._openShare(e);
     if (act === "retire") return this._openForm("confirm", e, "retire",
       `'${esc(e.name)}' uit dienst halen? De ${e.kind === "badge" ? "badge" : "code"} wordt van alle toestellen gehaald en bewaard, zodat je ze later kan herstellen.`);
     if (act === "forget") return this._openForm("confirm", e, "forget",
       `'${esc(e.name)}' definitief uit de lijst verwijderen? Dit kan niet ongedaan gemaakt worden. De toegangshistoriek blijft bewaard.`);
-    return this._run({ action: act, entry: e.id }, act === "unblock" ? "Gedeblokkeerd" : "Hersteld");
+    return this._run({ action: act, entry: e.id }, act === "unblock" ? (this._waiting(e) ? "Geactiveerd" : "Gedeblokkeerd") : "Hersteld");
+  }
+  _localInput(ms) {
+    // datum en uur voor een datetime-local veld, in de tijdzone van Home Assistant (niet die van de browser)
+    const parts = Object.fromEntries(new Intl.DateTimeFormat("en-CA", { timeZone: (this._hass.config || {}).time_zone || undefined,
+      year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hourCycle: "h23" })
+      .formatToParts(new Date(ms)).filter((p) => p.type !== "literal").map((p) => [p.type, p.value]));
+    return `${parts.year}-${parts.month}-${parts.day}T${parts.hour === "24" ? "00" : parts.hour}:${parts.minute}`;
+  }
+  _validityRows(e) {
+    const vf = e && e.valid_from ? this._localInput(Date.parse(e.valid_from)) : "";
+    const vu = e && e.valid_until ? this._localInput(Date.parse(e.valid_until)) : "";
+    return `<div class="row"><label>Geldig vanaf <input id="vfrom" type="datetime-local" value="${vf}"></label>
+        <label>Geldig tot <input id="vuntil" type="datetime-local" value="${vu}"></label>
+        <span class="muted">Leeg = vanaf nu, zonder einde. Na het einde gaat de code vanzelf uit dienst (herstelbaar).</span></div>`;
+  }
+  _readValidity(p) {
+    const full = (v) => (v && v.length === 16 ? v + ":00" : v || "");
+    const vf = full(p.querySelector("#vfrom").value), vu = full(p.querySelector("#vuntil").value);
+    if (vf && vu && vu <= vf) return { error: "Het einde van de geldigheid moet na het begin liggen." };
+    if (vu && vu <= this._localInput(Date.now()) + ":00") return { error: "Het einde van de geldigheid ligt in het verleden." };
+    return { vf, vu };
+  }
+  _shareText(e) {
+    const f = this._fmt;
+    const doors = (e.doors.length ? e.doors : e.stored).map((d) => d.name);
+    const doorTxt = doors.length > 1 ? `${doors.slice(0, -1).join(", ")} en ${doors[doors.length - 1]}` : doors.join("");
+    const when = (iso) => f.dateTime.format(new Date(iso)).replace(", ", " om ");
+    let valid = "Geldig vanaf nu, zonder einddatum.";
+    if (e.valid_from && e.valid_until) valid = `Geldig van ${when(e.valid_from)} tot ${when(e.valid_until)}.`;
+    else if (e.valid_from) valid = `Geldig vanaf ${when(e.valid_from)}.`;
+    else if (e.valid_until) valid = `Geldig tot ${when(e.valid_until)}.`;
+    return `Hallo ${e.name},\n\nJe toegangscode voor Trefpunt is ${e.secret}.\n${doors.length > 1 ? "Deuren" : "Deur"}: ${doorTxt}.\n${valid}\n\nTyp de code op het klavier van de deur. Hou de code voor jezelf.`;
+  }
+  _openShare(e, note) {
+    const p = this.shadowRoot.getElementById("panel");
+    this._message("");
+    this._form = { type: "share", entry: e };
+    p.innerHTML = `<div class="share"><h3>Code delen: ${esc(e.name)}</h3>
+      ${note ? `<div class="row msg ok">${esc(note)}</div>` : ""}
+      <div class="row"><label>Gsm <input id="phone" type="tel" placeholder="0492 12 34 56" autocomplete="off"></label>
+        <label>E-mail <input id="mail" type="email" placeholder="naam@voorbeeld.be" autocomplete="off"></label></div>
+      <div class="row" style="display:block"><textarea id="stext">${esc(this._shareText(e))}</textarea></div>
+      <div class="row sendbar">
+        <a class="btn primary" id="s_wa" target="_blank" rel="noopener">WhatsApp</a>
+        <a class="btn" id="s_sms">Sms</a>
+        <a class="btn" id="s_mail">Mail</a>
+        <button class="btn" id="s_copy">Kopieer tekst</button>
+        ${navigator.share ? `<button class="btn" id="s_native">Deelmenu</button>` : ""}
+        <button class="btn" id="cancel">Sluiten</button></div>
+      <div class="row muted">Gsm en e-mail zijn optioneel en worden niet bewaard. De tekst kun je hierboven aanpassen.</div></div>`;
+    const $ = (id) => p.querySelector("#" + id);
+    const upd = () => {
+      const t = encodeURIComponent($("stext").value);
+      let ph = $("phone").value.replace(/[^0-9+]/g, "");
+      if (ph.startsWith("00")) ph = "+" + ph.slice(2);
+      else if (ph.startsWith("0")) ph = "+32" + ph.slice(1);      // Belgisch nummer zonder landcode
+      $("s_wa").href = `https://wa.me/${ph.replace("+", "")}?text=${t}`;
+      $("s_sms").href = `sms:${ph}?&body=${t}`;
+      $("s_mail").href = `mailto:${encodeURIComponent($("mail").value.trim())}?subject=${encodeURIComponent("Je toegangscode voor Trefpunt")}&body=${t}`;
+    };
+    ["phone", "mail", "stext"].forEach((id) => $(id).addEventListener("input", upd));
+    upd();
+    $("s_copy").addEventListener("click", async () => {
+      const txt = $("stext").value;
+      try { await navigator.clipboard.writeText(txt); }
+      catch (err) { $("stext").select(); document.execCommand("copy"); }
+      this._message("Tekst gekopieerd.", true);
+    });
+    if ($("s_native")) $("s_native").addEventListener("click", () => navigator.share({ text: $("stext").value }).catch(() => {}));
+    $("cancel").addEventListener("click", () => this._closeForm());
+    p.classList.add("on");
+    p.scrollIntoView({ block: "nearest" });
   }
   _openForm(type, e, act, text) {
     if (!this._data) return this._message("De codes zijn nog niet geladen.");
@@ -903,24 +995,45 @@ class VtoCodes extends VtoBase {
       const isBadge = e && e.kind === "badge";
       const active = isNew || e.status === "active";
       const on = new Set(isNew ? [] : e.doors.map((d) => d.id));
+      const waiting = !isNew && this._waiting(e);
+      const canValid = isNew || e.status !== "retired";
       p.innerHTML = `<h3>${isNew ? "Nieuwe code" : "Aanpassen: " + esc(e.name)}</h3>
         <div class="row"><label>Naam <input id="name" type="text" value="${isNew ? "" : esc(e.name)}"></label>
-        ${isBadge ? "" : `<label>Code <input id="code" type="text" inputmode="numeric" pattern="[0-9]*" maxlength="8" placeholder="${isNew ? "4 tot 8 cijfers" : "ongewijzigd"}"></label>`}</div>
+        ${isBadge ? "" : `<label>Code <input id="code" type="text" inputmode="numeric" pattern="[0-9]*" maxlength="8" placeholder="${isNew ? "6 tot 8 cijfers" : "ongewijzigd"}"></label>`}</div>
         ${!isBadge && active ? `<div class="row">Deuren: ${doors.map((d) => `<label><input type="checkbox" value="${esc(d.id)}" ${on.has(d.id) ? "checked" : ""}> ${esc(d.name)}</label>`).join("")}</div>` : ""}
-        ${!isNew && !active ? `<div class="row muted">Deze ${isBadge ? "badge" : "code"} staat niet op de toestellen. De aanpassing wordt gebruikt bij deblokkeren of herstellen.</div>` : ""}
+        ${!isBadge && waiting ? `<div class="row">Deuren: ${e.stored.map((d) => `<span class="chip">${esc(d.name)}</span>`).join("")}</div>` : ""}
+        ${canValid ? this._validityRows(e) : ""}
+        ${!isNew && !active && !waiting ? `<div class="row muted">Deze ${isBadge ? "badge" : "code"} staat niet op de toestellen. De aanpassing wordt gebruikt bij deblokkeren of herstellen.</div>` : ""}
         <div class="row"><button class="btn primary" id="ok">Opslaan</button><button class="btn" id="cancel">Annuleren</button></div>`;
       p.querySelector("#ok").addEventListener("click", () => {
         const name = p.querySelector("#name").value.trim();
         const code = p.querySelector("#code") ? p.querySelector("#code").value.trim() : "";
         const sel = [...p.querySelectorAll("input[type=checkbox]:checked")].map((x) => x.value);
         if (!name) return this._message("Geef een naam.");
-        if (code && !/^[0-9]{4,8}$/.test(code)) return this._message("Een code heeft 4 tot 8 cijfers.");
+        if (code && !/^[0-9]{6,8}$/.test(code)) return this._message("Een code heeft 6 tot 8 cijfers.");
+        const v = canValid ? this._readValidity(p) : { vf: "", vu: "" };
+        if (v.error) return this._message(v.error);
         if (isNew) {
           if (!code) return this._message("Geef een code.");
           if (!sel.length) return this._message("Kies minstens een deur.");
-          return this._run({ action: "add", name, code, doors: sel }, "Code toegevoegd");
+          const add = { action: "add", name, code, doors: sel };
+          if (v.vf) add.valid_from = v.vf;
+          if (v.vu) add.valid_until = v.vu;
+          return this._run(add, "Code toegevoegd", (res) => {
+            const id = res && res.result && res.result.id;
+            const ne = id && this._data.entries.find((x) => x.id === id);
+            if (ne) this._openShare(ne, "Code toegevoegd. Deel ze meteen:");
+          });
         }
-        if (isBadge) return this._run({ action: "rename_badge", entry: e.id, name }, "Aangepast");
+        const steps = [];
+        const cur = { vf: e.valid_from ? this._localInput(Date.parse(e.valid_from)) + ":00" : "", vu: e.valid_until ? this._localInput(Date.parse(e.valid_until)) + ":00" : "" };
+        const vmsg = canValid && (v.vf !== cur.vf || v.vu !== cur.vu) ? { action: "validity", entry: e.id, valid_from: v.vf, valid_until: v.vu } : null;
+        if (isBadge) {
+          if (name !== e.name) steps.push({ action: "rename_badge", entry: e.id, name });
+          if (vmsg) steps.push(vmsg);
+          if (!steps.length) return this._message("Er is niets gewijzigd.");
+          return this._run(steps, "Aangepast");
+        }
         const msg = { action: "update", entry: e.id };
         if (name !== e.name) msg.name = name;
         if (code) msg.code = code;
@@ -929,8 +1042,10 @@ class VtoCodes extends VtoBase {
           const now = e.doors.map((d) => d.id).sort().join(",");
           if (sel.slice().sort().join(",") !== now) msg.doors = sel;
         }
-        if (Object.keys(msg).length === 2) return this._message("Er is niets gewijzigd.");
-        this._run(msg, "Aangepast");
+        if (Object.keys(msg).length > 2) steps.push(msg);
+        if (vmsg) steps.push(vmsg);
+        if (!steps.length) return this._message("Er is niets gewijzigd.");
+        this._run(steps, "Aangepast");
       });
     }
     p.querySelector("#cancel").addEventListener("click", () => this._closeForm());
@@ -943,15 +1058,21 @@ class VtoCodes extends VtoBase {
     p.innerHTML = "";
     this._form = null;
   }
-  async _run(msg, okText) {
+  async _run(msgs, okText, after) {
     if (this._busy) return;
     this._busy = true;
     this.shadowRoot.querySelectorAll("button").forEach((b) => { b.disabled = true; });
     this._message("Bezig...", true);
+    let res = null, ok = false;
     try {
-      await this._ws({ type: "btechnics_vto/manage/action", ...msg });
+      for (const msg of Array.isArray(msgs) ? msgs : [msgs]) {
+        const data = { type: "btechnics_vto/manage/action", ...msg };
+        Object.keys(data).forEach((k) => { if (data[k] === "") delete data[k]; });
+        res = await this._ws(data);
+      }
       this._closeForm();
       this._message(okText, true);
+      ok = true;
     } catch (e) {
       this._message(`Niet gelukt: ${errText(e)}`);
     } finally {
@@ -959,6 +1080,7 @@ class VtoCodes extends VtoBase {
       await this._load();
       this.shadowRoot.querySelectorAll("button").forEach((b) => { b.disabled = false; });
     }
+    if (ok && after) after(res);
   }
   getCardSize() {
     return 10;

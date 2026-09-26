@@ -9,7 +9,7 @@ add_code:
       selector: { text: {} }
     code:
       name: Code
-      description: 4 tot 8 cijfers
+      description: 6 tot 8 cijfers
       required: true
       example: "123456"
       selector: { text: {} }
@@ -19,6 +19,14 @@ add_code:
       required: true
       example: '["Café", "Kammerstraat"]'
       selector: { object: {} }
+    valid_from:
+      name: Geldig vanaf
+      description: Optioneel. Begint de geldigheid later, dan komt de code pas op dat moment op de toestellen.
+      selector: { datetime: {} }
+    valid_until:
+      name: Geldig tot
+      description: Optioneel. Daarna gaat de code automatisch uit dienst (herstelbaar).
+      selector: { datetime: {} }
 update_code:
   name: Code wijzigen
   description: Wijzigt naam, code of deuren van een code. Werkt voor alle codes, ook die al op de toestellen stonden.
@@ -174,3 +182,21 @@ add_badge:
 camera_probe:
   name: Camera testen
   description: Diagnose. Kijkt per toestel of een foto nemen lukt en of toegangen meteen gemeld worden. Bewaart geen beelden.
+
+set_validity:
+  name: Geldigheid instellen
+  description: >-
+    Stelt in van wanneer tot wanneer een code of badge geldig is. Voor het begin staat ze niet op de
+    toestellen, na het einde gaat ze automatisch uit dienst (herstelbaar). Leeg laten = geen begin of geen einde.
+  fields:
+    id:
+      name: Id
+      description: Id uit list_codes (beheer)
+      required: true
+      selector: { text: {} }
+    valid_from:
+      name: Geldig vanaf
+      selector: { datetime: {} }
+    valid_until:
+      name: Geldig tot
+      selector: { datetime: {} }
