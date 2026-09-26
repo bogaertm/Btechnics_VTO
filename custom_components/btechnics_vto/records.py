@@ -5,7 +5,7 @@ RecNo is positioneel en dus geen identiteit: records worden herkend op inhoud en
 """
 from datetime import datetime, timezone
 
-from .const import METHODS
+from .const import METHOD_INDOOR, METHODS
 
 
 def rec_time(r: dict) -> int:
@@ -92,9 +92,22 @@ def new_since(recs: list, keys: list, state: dict):
     return newer or None
 
 
-def method_label(m) -> str:
+def rec_room(r: dict) -> str:
+    """Nummer van de binnenpost die de deur opende (enkel bij methode binnenpost, anders leeg)."""
     try:
-        return METHODS.get(int(m), f"onbekend ({m})")
+        if int(r.get("Method")) != METHOD_INDOOR:
+            return ""
+    except (TypeError, ValueError):
+        return ""
+    return str(r.get("RoomNumber") or "").strip()
+
+
+def method_label(m, room: str = "") -> str:
+    try:
+        label = METHODS.get(int(m), f"onbekend ({m})")
+        if int(m) == METHOD_INDOOR and room:
+            label = f"{label} {room}"
+        return label
     except (TypeError, ValueError):
         return f"onbekend ({m})"
 
