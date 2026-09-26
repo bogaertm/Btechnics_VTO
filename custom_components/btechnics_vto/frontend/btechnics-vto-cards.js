@@ -1251,11 +1251,42 @@ class VtoHandleiding extends VtoBase {
 // exist"). Daarom registreren we opnieuw zolang het nodig is, telkens via window.customElements
 // (het register dat NU actief is) en met een nieuwe subklasse (een constructor mag maar een keer).
 const CARD_CLASSES = [["btechnics-vto-overzicht", VtoOverzicht], ["btechnics-vto-toegang", VtoToegang], ["btechnics-vto-codes", VtoCodes], ["btechnics-vto-handleiding", VtoHandleiding]];
+const CARDS_VERSION = "0.7.1";
 const define = (name, cls) => {
   if (window.customElements.get(name)) return;
-  try { window.customElements.define(name, class extends cls {}); } catch (e) { /* volgende poging */ }
+  try {
+    const R = class extends cls {};
+    R.__btxVto = CARDS_VERSION;
+    window.customElements.define(name, R);
+  } catch (e) { /* volgende poging */ }
 };
-const registerAll = () => { for (const [name, cls] of CARD_CLASSES) define(name, cls); };
+// Een oude kopie van de pagina (service worker) kan eerst een oudere versie van dit script laden. Een custom
+// element kan niet opnieuw gedefinieerd worden; daarom de al geregistreerde klasse op deze code laten steunen
+// en bestaande kaarten opnieuw opbouwen (vastgesteld 26/09/2026: v0.3.8 uit de cache, v0.7.0 via de resource).
+const reinit = (tag) => {
+  const walk = (root) => {
+    for (const el of root.querySelectorAll("*")) {
+      if (el.tagName === tag && el._hass) {
+        clearInterval(el._timer);
+        el._timer = null;
+        try { el._init(); } catch (e) { /* volgende kaart */ }
+      }
+      if (el.shadowRoot) walk(el.shadowRoot);
+    }
+  };
+  walk(document);
+};
+const upgrade = (name, cls) => {
+  const R = window.customElements.get(name);
+  if (!R || R.__btxVto === CARDS_VERSION || R.prototype instanceof cls) return;
+  try {
+    Object.setPrototypeOf(R.prototype, cls.prototype);
+    Object.setPrototypeOf(R, cls);
+    R.__btxVto = CARDS_VERSION;
+    reinit(name.toUpperCase());
+  } catch (e) { /* laat de oude versie staan */ }
+};
+const registerAll = () => { for (const [name, cls] of CARD_CLASSES) { define(name, cls); upgrade(name, cls); } };
 registerAll();
 let registerTries = 0;
 const registerTimer = setInterval(() => { registerAll(); if (++registerTries >= 120) clearInterval(registerTimer); }, 500);
