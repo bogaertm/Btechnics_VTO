@@ -517,7 +517,11 @@ def _register_services(hass: HomeAssistant):
             row = rows.get((m["name"], m["code"]))
             if row:
                 row["managed"], row["id"] = True, cid
-        return {"codes": sorted(rows.values(), key=lambda x: x["name"].lower()), "registry": reg.export()}
+        out = {"codes": sorted(rows.values(), key=lambda x: x["name"].lower()), "registry": reg.export()}
+        if call.data.get("raw"):
+            # alle velden zoals het toestel ze bewaart (diagnose), per deur
+            out["ruw"] = {c.door_name: {"codes": c.codes, "badges": c.cards} for c in coords.values()}
+        return out
 
     async def list_log(call: ServiceCall):
         # Leest rechtstreeks de volledige buffer van elke deur, over alle config entries heen.
@@ -564,7 +568,7 @@ def _register_services(hass: HomeAssistant):
             out.append({"deur": c.door_name, "home_assistant": dt_util.now().isoformat(timespec="seconds"), **clk})
         return {"toestellen": out}
 
-    hass.services.async_register(DOMAIN, "device_time", device_time, supports_response=SupportsResponse.ONLY)
+    async_register_admin_service(hass, DOMAIN, "device_time", device_time, supports_response=SupportsResponse.ONLY)
 
     async def sync_clock(call: ServiceCall):
         coords = _all_coords(hass)
@@ -579,15 +583,17 @@ def _register_services(hass: HomeAssistant):
     async_register_admin_service(hass, DOMAIN, "sync_clock", sync_clock, vol.Schema({
         vol.Required("doors"): vol.All(cv.ensure_list, [cv.string]),
         vol.Optional("ntp_server", default="be.pool.ntp.org"): cv.string}), supports_response=SupportsResponse.OPTIONAL)
-    hass.services.async_register(DOMAIN, "add_code", add_code, vol.Schema({
+    # Alles wat codes, badges of het logboek leest of wijzigt: enkel voor beheerders.
+    async_register_admin_service(hass, DOMAIN, "add_code", add_code, vol.Schema({
         vol.Required("name"): cv.string, vol.Required("code"): CODE_SCHEMA,
         vol.Required("doors"): vol.All(cv.ensure_list, [cv.string])}), supports_response=SupportsResponse.OPTIONAL)
-    hass.services.async_register(DOMAIN, "update_code", update_code, vol.Schema({
+    async_register_admin_service(hass, DOMAIN, "update_code", update_code, vol.Schema({
         vol.Required("id"): cv.string, vol.Optional("name"): cv.string, vol.Optional("code"): CODE_SCHEMA,
         vol.Optional("doors"): vol.All(cv.ensure_list, [cv.string])}), supports_response=SupportsResponse.OPTIONAL)
-    hass.services.async_register(DOMAIN, "remove_code", remove_code, vol.Schema({vol.Required("id"): cv.string}))
+    async_register_admin_service(hass, DOMAIN, "remove_code", remove_code, vol.Schema({vol.Required("id"): cv.string}))
     hass.services.async_register(DOMAIN, "refresh", refresh)
-    hass.services.async_register(DOMAIN, "list_codes", list_codes, supports_response=SupportsResponse.ONLY)
-    hass.services.async_register(DOMAIN, "list_log", list_log, vol.Schema({
+    async_register_admin_service(hass, DOMAIN, "list_codes", list_codes, vol.Schema({
+        vol.Optional("raw", default=False): cv.boolean}), supports_response=SupportsResponse.ONLY)
+    async_register_admin_service(hass, DOMAIN, "list_log", list_log, vol.Schema({
         vol.Optional("count"): vol.All(vol.Coerce(int), vol.Range(min=1, max=5000)),
         vol.Optional("raw", default=False): cv.boolean}), supports_response=SupportsResponse.ONLY)
