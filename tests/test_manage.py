@@ -508,3 +508,79 @@ async def test_deur_openen_op_afstand(hass, devices, hass_read_only_user):
         await hass.services.async_call(DOMAIN, "open_door", {"door": "Cafe"}, blocking=True,
                                        context=Context(user_id=hass_read_only_user.id), return_response=True)
     assert getattr(cafe, "opened", 0) == 0
+
+
+# ---------------------------------------------------------------- audit 26/09 (v0.8.0)
+
+async def test_verlopen_code_ook_van_deur_die_offline_was(hass, devices):
+    cafe, kam = devices
+    await setup_two_entries(hass)
+    res = await call(hass, "add_code", {"name": "Tijdelijk", "code": "917364", "doors": ["Cafe", "Kammerstraat"],
+                                        "valid_until": (dt_util.now() + timedelta(hours=1)).replace(tzinfo=None)}, True)
+    cid = res["id"]
+    m = reg(hass).managed[cid]
+    m["valid_until"] = (dt_util.utcnow() - timedelta(seconds=1)).isoformat()
+    kam.offline = True
+    mgr = hass.data[MANAGER_KEY]
+    await mgr._tick()
+    m = reg(hass).managed[cid]
+    assert on(cafe, "Tijdelijk") == [] and m["status"] == "retired" and "kammerstraat" in m["doors"]
+    kam.offline = False
+    await mgr._tick()
+    assert on(kam, "Tijdelijk") == [] and reg(hass).managed[cid]["doors"] == {}
+
+
+async def test_begin_later_blijft_gerespecteerd(hass, devices):
+    cafe, _ = devices
+    await setup_two_entries(hass)
+    await hass.async_block_till_done()
+    cid, _ = entry(hass, "Adriaan")
+    await call(hass, "block", {"id": cid, "until": (dt_util.now() + timedelta(hours=1)).replace(tzinfo=None)})
+    start = dt_util.now() + timedelta(days=7)
+    await call(hass, "set_validity", {"id": cid, "valid_from": start.replace(tzinfo=None)}, True)
+    m = reg(hass).managed[cid]
+    assert m["until"] == m["valid_from"]                         # blokkering loopt door tot het begin
+    m["until"] = (dt_util.utcnow() - timedelta(seconds=1)).isoformat()   # oude blokkering voorbij
+    await hass.data[MANAGER_KEY]._tick()
+    m = reg(hass).managed[cid]
+    assert m["status"] == "blocked" and m["until"] == m["valid_from"] and on(cafe, "Adriaan") == []
+    await call(hass, "retire", {"id": cid})
+    await call(hass, "restore", {"id": cid})                     # herstellen: wacht nog altijd op het begin
+    m = reg(hass).managed[cid]
+    assert m["status"] == "blocked" and on(cafe, "Adriaan") == []
+    await call(hass, "unblock", {"id": cid})                     # Nu al activeren
+    assert reg(hass).managed[cid]["status"] == "active" and len(on(cafe, "Adriaan")) == 1
+
+
+async def test_eenmalige_code_met_automatische_code(hass, devices):
+    from custom_components.btechnics_vto.const import EVENT_UNLOCK
+    cafe, _ = devices
+    await setup_two_entries(hass)
+    res = await call(hass, "add_code", {"name": "Pakket 26/9", "doors": ["Cafe"], "max_uses": 1,
+                                        "valid_until": (dt_util.now() + timedelta(hours=24)).replace(tzinfo=None)}, True)
+    code = res["code"]
+    assert len(code) == 6 and code.isdigit() and len(on(cafe, "Pakket 26/9", code)) == 1
+    hass.bus.async_fire(EVENT_UNLOCK, {"name": "Pakket 26/9", "method": "code", "opened": False})   # geweigerd telt niet
+    await hass.async_block_till_done()
+    assert reg(hass).managed[res["id"]]["status"] == "active"
+    hass.bus.async_fire(EVENT_UNLOCK, {"name": "Pakket 26/9", "method": "code", "opened": True})
+    await hass.async_block_till_done()
+    m = reg(hass).managed[res["id"]]
+    assert m["status"] == "retired" and on(cafe, "Pakket 26/9") == []
+    assert reg(hass).audit[-1]["detail"] == "eenmalig gebruikt"
+
+
+def test_zwakke_codes_niet_gekozen():
+    from custom_components.btechnics_vto import _weak
+    for c in ("111111", "123456", "654321", "121212", "123123", "112211", "000000"):
+        assert _weak(c), c
+    assert not _weak("917364")
+
+
+async def test_mislukt_openen_staat_in_wijzigingen(hass, devices):
+    _, kam = devices
+    await setup_two_entries(hass)
+    kam.refuse_open = True
+    with pytest.raises(HomeAssistantError):
+        await call(hass, "open_door", {"door": "Kammerstraat"}, True)
+    assert reg(hass).audit[-1]["action"] == "deur openen mislukt"

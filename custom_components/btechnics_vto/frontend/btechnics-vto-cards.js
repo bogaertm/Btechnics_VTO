@@ -180,19 +180,38 @@ class VtoOverzicht extends VtoBase {
       .name { font-size: 1.15rem; font-weight: 500; }
       .chip { font-size: 0.8rem; padding: 2px 10px; border-radius: 12px; background: var(--secondary-background-color); color: var(--secondary-text-color); display: inline-flex; align-items: center; gap: 6px; }
       .chip.off { color: var(--error-color, ${C_REFUSED}); }
-      .last { display: flex; gap: 12px; align-items: center; }
+      .last { display: flex; gap: 12px; align-items: center; height: 88px; }
+      .last .txt { flex: 1; min-width: 0; }
+      .last .line { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; line-height: 1.35; }
+      .pic { width: 104px; height: 64px; flex: none; border-radius: 8px; background: var(--secondary-background-color);
+        display: flex; align-items: center; justify-content: center; color: var(--secondary-text-color); overflow: hidden; }
+      .pic button.thumb, .pic button.thumb img { width: 104px; height: 64px; }
+      .stat .l { min-height: 2.7em; line-height: 1.35; }
+      table.recent { table-layout: fixed; width: 100%; }
+      table.recent td { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; height: 22px; }
+      table.recent col.c1 { width: 33%; } table.recent col.c2 { width: 26%; } table.recent col.c3 { width: 12%; } table.recent col.c4 { width: 29%; }
+      table.recent button.photo { padding: 0 2px; min-height: 0; height: 20px; }
+      @media (max-width: 480px) {
+        .pic, .pic button.thumb, .pic button.thumb img { width: 72px; height: 48px; }
+        .last { height: 80px; } .who.line { font-size: 1.05rem; }
+        table.recent col.c1 { width: 38%; } table.recent col.c2 { width: 30%; } table.recent col.c3 { width: 0; } table.recent col.c4 { width: 32%; }
+        table.recent td:nth-child(3) { padding: 0; font-size: 0; }
+      }
+      table.recent button.photo ha-icon { --mdc-icon-size: 16px; }
       .icon { width: 44px; height: 44px; border-radius: 50%; display: flex; align-items: center; justify-content: center; flex: none; }
       .icon.open { background: rgba(2, 136, 209, 0.15); color: ${C_OPEN}; }
       .icon.refused { background: rgba(219, 68, 55, 0.15); color: ${C_REFUSED}; }
       .icon.none { background: var(--secondary-background-color); color: var(--secondary-text-color); }
       .who { font-size: 1.2rem; font-weight: 500; }
+      .who.line { font-size: 1.2rem; }
       .stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }
       .stat { background: var(--secondary-background-color); border-radius: 8px; padding: 8px; }
       .stat .v { font-size: 1.2rem; font-weight: 500; font-variant-numeric: tabular-nums; }
       .stat .l { font-size: 0.8rem; color: var(--secondary-text-color); }
       .recent td { padding: 6px 4px; font-size: 0.9rem; }
       .foot { font-size: 0.8rem; color: var(--secondary-text-color); margin-top: 12px; }
-      .opener { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+      .opener { display: flex; align-items: center; gap: 10px; flex-wrap: nowrap; min-height: 44px; }
+      .opener .omsg { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
       .opener button.btn { display: inline-flex; align-items: center; gap: 6px; }
       .opener button.btn.sure { background: var(--error-color, ${C_REFUSED}); color: #fff; border-color: var(--error-color, ${C_REFUSED}); }
       .opener .omsg { font-size: 0.85rem; }
@@ -244,7 +263,7 @@ class VtoOverzicht extends VtoBase {
     body.innerHTML = `<div class="doors">${doors.map((d) => this._door(d, f)).join("")}</div>`;
     body.querySelectorAll("[data-open]").forEach((b) => b.addEventListener("click", () => this._open(b)));
     body.querySelectorAll("img[data-thumb]").forEach(async (img) => {
-      try { img.src = await photoSrc(this._hass, img.dataset.thumb); } catch (e) { img.closest("button").remove(); }
+      try { img.src = await photoSrc(this._hass, img.dataset.thumb); } catch (e) { const bt = img.closest("button"); bt.outerHTML = '<ha-icon icon="mdi:camera-off-outline"></ha-icon>'; }
     });
     const a = this._data.archive || {};
     const first = Object.values(a).map((x) => x.first).filter(Boolean).sort()[0];
@@ -257,23 +276,25 @@ class VtoOverzicht extends VtoBase {
     const cls = !d.available ? "none" : !u ? "none" : u.opened ? "open" : "refused";
     const icon = !d.available ? "mdi:lan-disconnect" : !u ? "mdi:door" : u.opened ? "mdi:door-open" : "mdi:door-closed-lock";
     const who = !d.available ? "Niet bereikbaar" : !u ? "Nog geen toegang" : u.name === "?" ? "Onbekende code" : u.name;
-    const lastTxt = u ? `${u.opened ? "geopend" : "geweigerd"} via ${esc(u.method)}, ${f.dateTime.format(new Date(u.ts * 1000))}` : "";
-    const sub = !d.available
-      ? (u ? `Laatst gekend: ${esc(u.name === "?" ? "onbekende code" : u.name)}, ${lastTxt}` : "Geen verbinding met het toestel")
-      : (u ? lastTxt.charAt(0).toUpperCase() + lastTxt.slice(1) : "");
+    // twee vaste regels: hoe, en wanneer
+    const how = !u ? "" : String(u.method).startsWith("op afstand") ? `${u.opened ? "Geopend" : "Geweigerd"} op afstand`
+      : `${u.opened ? "Geopend" : "Geweigerd"} via ${u.method}`;
+    const line1 = !d.available ? (u ? `Laatst gekend: ${how}` : "Geen verbinding met het toestel") : how;
+    const line2 = u ? f.dateTime.format(new Date(u.ts * 1000)) : "";
     const recent = (d.recent || []).slice(0, 6).map((r) => `<tr>
-        <td class="muted" style="white-space:nowrap">${f.short.format(new Date(r.ts * 1000))}</td>
+        <td class="muted">${f.dateTime.format(new Date(r.ts * 1000)).replace(/ \d{4},/, ",")}</td>
         <td>${r.name === "?" ? '<span class="muted">onbekende code</span>' : isLabel(r.name) ? `<span class="muted">${esc(r.name)}</span>` : esc(r.name)}</td>
-        <td class="muted">${esc(r.method)}</td>
-        <td><span class="status"><span class="dot ${r.opened ? "open" : "refused"}"></span>${r.opened ? "Geopend" : "Geweigerd"}${photoBtn(this._hass, r, `${r.name === "?" ? "Onbekende code" : r.name}, ${d.name}, ${f.dateTime.format(new Date(r.ts * 1000))}`)}</span></td></tr>`).join("");
-    const thumb = u && u.photo && isAdmin(this._hass)
+        <td class="muted">${String(r.method).startsWith("op afstand") ? "afstand" : esc(r.method)}</td>
+        <td><span class="status"><span class="dot ${r.opened ? "open" : "refused"}"></span>${r.opened ? "Geopend" : "Geweigerd"}${photoBtn(this._hass, r, `${r.name === "?" ? "Onbekende code" : r.name}, ${d.name}, ${f.dateTime.format(new Date(r.ts * 1000))}`)}</span></td></tr>`).join("")
+      + '<tr><td colspan="4">&nbsp;</td></tr>'.repeat(Math.max(0, 6 - Math.min(6, (d.recent || []).length)));
+    const thumb = `<div class="pic">${u && u.photo && isAdmin(this._hass)
       ? `<button class="thumb" data-photo="${esc(u.photo)}" data-cap="${esc(`${who}, ${d.name}, ${f.dateTime.format(new Date(u.ts * 1000))}`)}" title="Foto bekijken"><img data-thumb="${esc(u.photo)}" alt="Foto van de laatste toegang"></button>`
-      : "";
+      : `<ha-icon icon="mdi:camera-off-outline" title="Geen foto"></ha-icon>`}</div>`;
     return `<div class="door">
       <div class="head"><span class="name">${esc(d.name)}</span>
         <span class="chip ${d.available ? "" : "off"}">${d.available ? "Online" : "Offline"}</span></div>
       <div class="last"><div class="icon ${cls}"><ha-icon icon="${icon}"></ha-icon></div>
-        <div style="flex:1;min-width:0"><div class="who">${esc(who)}</div><div class="muted">${sub}</div></div>${thumb}</div>
+        <div class="txt"><div class="who line">${esc(who)}</div><div class="muted line">${esc(line1)}</div><div class="muted line">${esc(line2) || "&nbsp;"}</div></div>${thumb}</div>
       <div class="stats">
         <div class="stat"><div class="v">${d.today.opened}</div><div class="l">Vandaag geopend</div></div>
         <div class="stat"><div class="v">${d.today.refused}</div><div class="l">Vandaag geweigerd</div></div>
@@ -282,12 +303,12 @@ class VtoOverzicht extends VtoBase {
       </div>
       ${isAdmin(this._hass) ? `<div class="opener"><button class="btn" data-open="${esc(d.id)}" data-name="${esc(d.name)}" ${d.available ? "" : "disabled"}>
         <ha-icon icon="mdi:door-open" style="--mdc-icon-size:18px"></ha-icon> Deur openen</button><span class="omsg" data-omsg="${esc(d.id)}"></span></div>` : ""}
-      ${recent ? `<div class="scroll"><table class="recent">${recent}</table></div>` : '<div class="empty">Geen recente toegangen</div>'}
+      <table class="recent"><colgroup><col class="c1"><col class="c2"><col class="c3"><col class="c4"></colgroup>${recent}</table>
     </div>`;
   }
   async _open(b) {
     // twee klikken: eerst bevestigen, zodat een deur nooit per ongeluk opengaat
-    const msg = this.shadowRoot.querySelector(`[data-omsg="${b.dataset.open}"]`);
+    const msg = this.shadowRoot.querySelector(`[data-omsg="${CSS.escape(b.dataset.open)}"]`);
     if (b.dataset.sure !== "1") {
       b.dataset.sure = "1";
       b.classList.add("sure");
@@ -739,6 +760,7 @@ class VtoCodes extends VtoBase {
         <input id="q" type="search" placeholder="Zoek persoon, code of badgenummer" autocomplete="off">
         <select id="kind"><option value="all">Codes en badges</option><option value="code">Codes</option><option value="badge">Badges</option></select>
         <button id="toggle" class="btn"><ha-icon icon="mdi:eye" style="--mdc-icon-size:18px"></ha-icon> Codes tonen</button>
+        <button id="quick" class="btn primary"><ha-icon icon="mdi:timer-outline" style="--mdc-icon-size:18px"></ha-icon> Tijdelijke code</button>
         <button id="new" class="btn primary"><ha-icon icon="mdi:plus" style="--mdc-icon-size:18px"></ha-icon> Nieuwe code</button>
         <button id="newbadge" class="btn primary"><ha-icon icon="mdi:card-account-details-outline" style="--mdc-icon-size:18px"></ha-icon> Nieuwe badge</button>
       </div>
@@ -759,6 +781,7 @@ class VtoCodes extends VtoBase {
       this._render();
     });
     $("new").addEventListener("click", () => this._openForm("add", null));
+    $("quick").addEventListener("click", () => this._openQuick());
     $("newbadge").addEventListener("click", () => this._openForm("addbadge", null));
     this.shadowRoot.addEventListener("click", (e) => {
       const h = e.target.closest("[data-hist]");
@@ -886,6 +909,7 @@ class VtoCodes extends VtoBase {
           <td>${e.doors.map((d) => `<span class="chip">${esc(d.name)}</span>`).join("")}${e.stored.map((d) => `<span class="chip stored" title="bewaard, niet op het toestel">${esc(d.name)}</span>`).join("")}</td>
           <td><span class="status">${dot(e)}${esc(this._statusText(e))}</span>
             ${e.valid_until && e.status !== "retired" ? `<div class="valid">Geldig tot ${esc(this._fmt.dateTime.format(new Date(e.valid_until)))}</div>` : ""}
+            ${e.max_uses && e.status !== "retired" ? `<div class="valid">${e.max_uses === 1 ? "Eenmalig" : `${e.uses || 0} van ${e.max_uses} keer gebruikt`}</div>` : ""}
             ${e.status !== "active" && e.doors.length ? `<div class="warn">Nog actief op ${e.doors.map((d) => esc(d.name)).join(", ")}</div>` : ""}</td>
           <td><div class="acts">${acts(e)}</div></td></tr>`).join("")}
         </tbody></table>`;
@@ -923,11 +947,11 @@ class VtoCodes extends VtoBase {
         <label>Geldig tot <input id="vuntil" type="datetime-local" value="${vu}"></label>
         <span class="muted">Leeg = vanaf nu, zonder einde. Na het einde gaat de code vanzelf uit dienst (herstelbaar).</span></div>`;
   }
-  _readValidity(p) {
+  _readValidity(p, curVu) {
     const full = (v) => (v && v.length === 16 ? v + ":00" : v || "");
     const vf = full(p.querySelector("#vfrom").value), vu = full(p.querySelector("#vuntil").value);
     if (vf && vu && vu <= vf) return { error: "Het einde van de geldigheid moet na het begin liggen." };
-    if (vu && vu <= this._localInput(Date.now()) + ":00") return { error: "Het einde van de geldigheid ligt in het verleden." };
+    if (vu && vu !== curVu && vu <= this._localInput(Date.now()) + ":00") return { error: "Het einde van de geldigheid ligt in het verleden." };
     return { vf, vu };
   }
   _shareText(e) {
@@ -939,7 +963,93 @@ class VtoCodes extends VtoBase {
     if (e.valid_from && e.valid_until) valid = `Geldig van ${when(e.valid_from)} tot ${when(e.valid_until)}.`;
     else if (e.valid_from) valid = `Geldig vanaf ${when(e.valid_from)}.`;
     else if (e.valid_until) valid = `Geldig tot ${when(e.valid_until)}.`;
-    return `Hallo ${e.name},\n\nJe toegangscode voor Trefpunt is ${e.secret}.\n${doors.length > 1 ? "Deuren" : "Deur"}: ${doorTxt}.\n${valid}\n\nZo open je de deur: typ op het klavier # ${e.secret} # (hekje, je code, hekje). Hou de code voor jezelf.`;
+    if (e.max_uses) valid += e.max_uses === 1 ? " De code werkt maar een keer." : ` De code werkt maximaal ${e.max_uses} keer.`;
+    const hi = /^(Pakket|Technicus|Gast|Andere)\b/.test(e.name) ? "Hallo" : `Hallo ${e.name}`;
+    return `${hi},\n\nJe toegangscode voor Trefpunt is ${e.secret}.\n${doors.length > 1 ? "Deuren" : "Deur"}: ${doorTxt}.\n${valid}\n\nZo open je de deur: typ op het klavier # ${e.secret} # (hekje, je code, hekje). Hou de code voor jezelf.`;
+  }
+  _openQuick() {
+    // Tijdelijke code in een paar klikken, naar het voorbeeld van eenmalige en tijdelijke pincodes bij slimme sloten:
+    // doel kiezen, deur(en), geldigheid; Home Assistant kiest zelf een willekeurige vrije code; meteen delen.
+    if (!this._data) return this._message("De codes zijn nog niet geladen.");
+    const p = this.shadowRoot.getElementById("panel");
+    const doors = this._data.doors;
+    this._message("");
+    this._form = { type: "quick" };
+    let saved = [];
+    try { saved = JSON.parse(localStorage.getItem("btxvto_quick_doors") || "[]"); } catch (err) { saved = []; }
+    const TYPES = [["Pakket", "24", 1], ["Technicus", "today", 0], ["Gast", "3d", 0], ["Andere", "24", 0]];
+    const DUR = [["1", "1 uur"], ["today", "Vandaag"], ["24", "24 uur"], ["3d", "3 dagen"], ["7d", "1 week"], ["custom", "Eigen"]];
+    const st = { type: "Pakket", dur: "24", once: true };
+    const day = () => { const x = this._localInput(Date.now()); return `${Number(x.slice(8, 10))}/${Number(x.slice(5, 7))}`; };
+    p.innerHTML = `<h3>Tijdelijke code</h3>
+      <div class="row" id="qtype">${TYPES.map(([t]) => `<button class="btn" data-qt="${t}">${t}</button>`).join("")}</div>
+      <div class="row"><label>Naam <input id="qname" type="text" maxlength="30"></label>
+        <span class="muted">Bv. "Pakket bol" of "Technicus Fluvius". Komt in de historiek.</span></div>
+      <div class="row">Deuren: ${doors.map((d) => `<label><input type="checkbox" class="qd" value="${esc(d.id)}" ${saved.includes(d.id) || (!saved.length && d === doors[0]) ? "checked" : ""}> ${esc(d.name)}</label>`).join("")}</div>
+      <div class="row" id="qdur">Geldig: ${DUR.map(([k, l]) => `<button class="btn" data-qd="${k}">${l}</button>`).join("")}</div>
+      <div class="row" id="qcustom" style="display:none"><label>Vanaf <input id="vfrom" type="datetime-local"></label><label>Tot <input id="vuntil" type="datetime-local"></label></div>
+      <div class="row"><label><input type="checkbox" id="qonce"> Eenmalig: na de eerste opening gaat de code vanzelf uit dienst</label></div>
+      <div class="row muted" id="qsum"></div>
+      <div class="row"><button class="btn primary" id="ok">Maak code en deel</button><button class="btn" id="cancel">Annuleren</button></div>`;
+    const $ = (id) => p.querySelector("#" + id);
+    let nameTouched = false;
+    $("qname").addEventListener("input", () => { nameTouched = true; });
+    const until = () => {
+      const now = Date.now(), H = 3600000;
+      const endOfDay = () => { const x = this._localInput(now); return `${x.slice(0, 10)}T23:59:00`; };
+      if (st.dur === "1") return this._localInput(now + H) + ":00";
+      if (st.dur === "today") return endOfDay();
+      if (st.dur === "24") return this._localInput(now + 24 * H) + ":00";
+      if (st.dur === "3d") return this._localInput(now + 72 * H) + ":00";
+      if (st.dur === "7d") return this._localInput(now + 168 * H) + ":00";
+      const v = $("vuntil").value;
+      return v ? (v.length === 16 ? v + ":00" : v) : "";
+    };
+    const draw = () => {
+      p.querySelectorAll("[data-qt]").forEach((b) => b.classList.toggle("active", b.dataset.qt === st.type));
+      p.querySelectorAll("[data-qd]").forEach((b) => b.classList.toggle("active", b.dataset.qd === st.dur));
+      $("qcustom").style.display = st.dur === "custom" ? "flex" : "none";
+      $("qonce").checked = st.once;
+      if (!nameTouched) $("qname").value = `${st.type} ${day()}`;
+      const u = until();
+      $("qsum").textContent = u ? `Geldig tot ${this._fmt.dateTime.format(new Date(Date.parse(u + "Z") - this._tzOffset(u)))}${st.once ? ", eenmalig" : ""}. Home Assistant kiest een willekeurige code van 6 cijfers.` : "Kies een einde.";
+    };
+    p.querySelectorAll("[data-qt]").forEach((b) => b.addEventListener("click", () => {
+      const t = TYPES.find((x) => x[0] === b.dataset.qt); st.type = t[0]; st.dur = t[1]; st.once = !!t[2]; draw();
+    }));
+    p.querySelectorAll("[data-qd]").forEach((b) => b.addEventListener("click", () => { st.dur = b.dataset.qd; draw(); }));
+    $("qonce").addEventListener("change", (ev) => { st.once = ev.target.checked; draw(); });
+    ["vfrom", "vuntil"].forEach((id) => $(id).addEventListener("input", draw));
+    $("ok").addEventListener("click", () => {
+      const name = $("qname").value.trim();
+      const sel = [...p.querySelectorAll(".qd:checked")].map((x) => x.value);
+      if (!name) return this._message("Geef een naam.");
+      if (!sel.length) return this._message("Kies minstens een deur.");
+      const vu = until();
+      const vf = st.dur === "custom" && $("vfrom").value ? ($("vfrom").value.length === 16 ? $("vfrom").value + ":00" : $("vfrom").value) : "";
+      if (!vu) return this._message("Kies tot wanneer de code geldig is.");
+      if (vu <= this._localInput(Date.now()) + ":00") return this._message("Het einde ligt in het verleden.");
+      if (vf && vu <= vf) return this._message("Het einde moet na het begin liggen.");
+      try { localStorage.setItem("btxvto_quick_doors", JSON.stringify(sel)); } catch (err) { /* niet erg */ }
+      const msg = { action: "add", name, doors: sel, valid_until: vu };
+      if (vf) msg.valid_from = vf;
+      if (st.once) msg.max_uses = 1;
+      this._run(msg, "Tijdelijke code gemaakt", (res) => {
+        const id = res && res.result && res.result.id;
+        const ne = id && this._data.entries.find((x) => x.id === id);
+        if (ne) this._openShare(ne, "Tijdelijke code gemaakt. Deel ze meteen:");
+      });
+    });
+    $("cancel").addEventListener("click", () => this._closeForm());
+    draw();
+    p.classList.add("on");
+    p.scrollIntoView({ block: "nearest" });
+  }
+  _tzOffset(localIso) {
+    // verschil tussen de gegeven lokale tijd (tijdzone van Home Assistant) en UTC, in ms
+    const t = Date.parse(localIso + "Z");
+    const back = Date.parse(this._localInput(t) + ":00Z");
+    return back - t;
   }
   _openShare(e, note) {
     const p = this.shadowRoot.getElementById("panel");
@@ -1045,7 +1155,8 @@ class VtoCodes extends VtoBase {
         const sel = [...p.querySelectorAll("input[type=checkbox]:checked")].map((x) => x.value);
         if (!name) return this._message("Geef een naam.");
         if (code && !/^[0-9]{6,8}$/.test(code)) return this._message("Een code heeft 6 tot 8 cijfers.");
-        const v = canValid ? this._readValidity(p) : { vf: "", vu: "" };
+        const curVu = !isNew && e.valid_until ? this._localInput(Date.parse(e.valid_until)) + ":00" : "";
+        const v = canValid ? this._readValidity(p, curVu) : { vf: "", vu: "" };
         if (v.error) return this._message(v.error);
         if (isNew) {
           if (!code) return this._message("Geef een code.");
@@ -1180,6 +1291,16 @@ const VTO_HELP = [
       ["Wacht op begin", "De geldigheid begint later; de code staat nog niet op het toestel en komt er vanzelf op"],
       ["Geblokkeerd", "Tijdelijk van de toestellen gehaald, tot een tijdstip of tot je deblokkeert"],
       ["Uit dienst", "Van de toestellen gehaald en bewaard; herstellen kan altijd"]])}
+    <p><b>Tijdelijke code</b> (pakket, technicus, gast): de snelste manier.</p>
+    <ol>
+      <li>Klik op Tijdelijke code.</li>
+      <li>Kies Pakket, Technicus, Gast of Andere. Dat vult de naam en de geldigheid al in; pas de naam aan, bv. "Pakket bol".</li>
+      <li>Vink de deur of deuren aan. Je laatste keuze wordt onthouden.</li>
+      <li>Kies hoe lang: 1 uur, Vandaag (tot 23u59), 24 uur, 3 dagen, 1 week of Eigen (met begin en einde).</li>
+      <li>Eenmalig staat aan bij Pakket: na de eerste opening gaat de code vanzelf uit dienst.</li>
+      <li>Klik op Maak code en deel. Home Assistant kiest een willekeurige vrije code van 6 cijfers (geen 123456, 111111 of gelijkaardige) en het deelvenster opent meteen.</li>
+    </ol>
+    <p>Na het einde of na het eenmalig gebruik gaat de code vanzelf uit dienst. Ze blijft in de lijst Uit dienst, zodat je ziet wie wanneer binnenkwam.</p>
     <p><b>Nieuwe code</b></p>
     <ol>
       <li>Klik op Nieuwe code.</li>
@@ -1252,7 +1373,7 @@ class VtoHandleiding extends VtoBase {
 // exist"). Daarom registreren we opnieuw zolang het nodig is, telkens via window.customElements
 // (het register dat NU actief is) en met een nieuwe subklasse (een constructor mag maar een keer).
 const CARD_CLASSES = [["btechnics-vto-overzicht", VtoOverzicht], ["btechnics-vto-toegang", VtoToegang], ["btechnics-vto-codes", VtoCodes], ["btechnics-vto-handleiding", VtoHandleiding]];
-const CARDS_VERSION = "0.7.2";
+const CARDS_VERSION = "0.8.0";
 const define = (name, cls) => {
   if (window.customElements.get(name)) return;
   try {
@@ -1280,6 +1401,11 @@ const reinit = (tag) => {
 const upgrade = (name, cls) => {
   const R = window.customElements.get(name);
   if (!R || R.__btxVto === CARDS_VERSION || R.prototype instanceof cls) return;
+  // enkel naar een nieuwere versie (twee scriptversies mogen elkaar niet om beurten vervangen)
+  const v = (x) => String(x || "0").split(".").map(Number);
+  const [a, b] = [v(CARDS_VERSION), v(R.__btxVto)];
+  const newer = a.findIndex((n, i) => n !== (b[i] || 0));
+  if (R.__btxVto && (newer < 0 || a[newer] < (b[newer] || 0))) return;
   try {
     Object.setPrototypeOf(R.prototype, cls.prototype);
     Object.setPrototypeOf(R, cls);

@@ -194,7 +194,8 @@ async def ws_manage_list(hass, connection, msg):
         for cid, m in mgr.reg.managed.items():
             entries.append({
                 "id": cid, "kind": m["kind"], "name": m["name"], "secret": secret(m), "status": m["status"],
-                "until": m.get("until"), "valid_from": m.get("valid_from"), "valid_until": m.get("valid_until"), "source": m.get("source"), "created": m.get("created"), "updated": m.get("updated"),
+                "until": m.get("until"), "valid_from": m.get("valid_from"), "valid_until": m.get("valid_until"),
+                "max_uses": m.get("max_uses"), "uses": m.get("uses") or 0, "source": m.get("source"), "created": m.get("created"), "updated": m.get("updated"),
                 "doors": sorted(({"id": d, "name": names.get(d, d)} for d in m["doors"]), key=lambda x: x["name"].lower()),
                 "stored": sorted(({"id": d, "name": names.get(d, d)} for d in m["stored"]), key=lambda x: x["name"].lower()),
             })
@@ -218,7 +219,7 @@ async def ws_manage_list(hass, connection, msg):
 
 ACTIONS = {
     # actie: (service, velden, antwoord)
-    "add": ("add_code", ("name", "code", "doors", "valid_from", "valid_until"), True),
+    "add": ("add_code", ("name", "code", "doors", "valid_from", "valid_until", "max_uses"), True),
     "validity": ("set_validity", ("id", "valid_from", "valid_until"), True),
     "update": ("update_code", ("id", "name", "code", "doors"), True),
     "rename_badge": ("rename_badge", ("id", "name"), True),
@@ -244,6 +245,7 @@ ACTIONS = {
     vol.Optional("until"): str,
     vol.Optional("valid_from"): str,
     vol.Optional("valid_until"): str,
+    vol.Optional("max_uses"): int,
 })
 @websocket_api.async_response
 async def ws_manage_action(hass, connection, msg):

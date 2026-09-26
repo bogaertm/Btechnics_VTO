@@ -18,6 +18,7 @@ from homeassistant.helpers.event import async_track_time_interval
 from homeassistant.util import dt as dt_util
 
 from .api import VTOError
+from .const import EVENT_UNLOCK
 from .registry import CodeRegistry, rec_identity, secret
 
 _LOGGER = logging.getLogger(__name__)
@@ -206,7 +207,7 @@ class Manager:
 
     # ---------- acties ----------
 
-    async def block(self, cid: str, until, user: str, retire: bool = False, reason: str = ""):
+    async def block(self, cid: str, until, user: str, retire: bool = False, reason: str = "", quiet: bool = False):
         """Van alle toestellen halen en bewaren. until: datetime (UTC) of None (tot deblokkeren)."""
         m = self.entry(cid)
         if m["status"] == "retired" and not m["doors"]:
@@ -278,17 +279,35 @@ class Manager:
             msg = f"'{name}' {action}, maar niet overal: {'; '.join(errors)}."
             if still:
                 msg += f" Nog actief op {', '.join(still)}: probeer opnieuw of kijk het toestel na."
-            self.notify(msg, cid)
+            if quiet:
+                _LOGGER.debug(msg)
+            else:
+                self.notify(msg, cid)
             raise HomeAssistantError(msg)
         return {"id": cid, "status": m["status"]}
 
-    async def unblock(self, cid: str, user: str, action: str = "gedeblokkeerd", quiet: bool = False):
-        """Alle bewaarde records terug op de toestellen zetten."""
+    async def unblock(self, cid: str, user: str, action: str = "gedeblokkeerd", quiet: bool = False,
+                      respect_start: bool = False):
+        """Alle bewaarde records terug op de toestellen zetten.
+
+        respect_start (planner en herstellen): begint de geldigheid nog later, dan blijft de code van de
+        toestellen en wacht ze op het begin. Manueel deblokkeren (Nu al activeren) zet ze meteen actief."""
         m = self.entry(cid)
+        now = dt_util.utcnow()
+        vf = dt_util.parse_datetime(m["valid_from"]) if m.get("valid_from") else None
+        if respect_start and vf is not None and vf > now and m["stored"] and not m["doors"]:
+            m["status"], m["until"] = "blocked", m["valid_from"]
+            m.pop("uses", None)
+            self.reg.touch(m)
+            self.reg.log(user, action, m, [], "wacht op het begin, " + _until_txt(vf))
+            await self.reg.save()
+            return {"id": cid, "status": "blocked"}
         vu = dt_util.parse_datetime(m["valid_until"]) if m.get("valid_until") else None
-        if vu is not None and vu <= dt_util.utcnow():
+        if vu is not None and vu <= now:
             m["valid_until"] = None     # herstellen na het einde van de geldigheid: zonder einde, anders meteen weer uit dienst
         m["valid_from"] = None          # wat nu op het toestel komt, is vanaf nu geldig
+        if m["status"] == "retired":
+            m.pop("uses", None)         # herstellen: eenmalige code opnieuw bruikbaar
         if not m["stored"]:
             if m["status"] == "active":
                 raise HomeAssistantError(f"'{m['name']}' is niet geblokkeerd")
@@ -469,9 +488,18 @@ class Manager:
         await self.reg.save()
         if m["valid_from"]:
             if m["status"] == "active":
-                await self.block(cid, vfrom, user, reason="wacht op het begin van de geldigheid, " + _until_txt(vfrom))
+                try:
+                    await self.block(cid, vfrom, user, reason="wacht op het begin van de geldigheid, " + _until_txt(vfrom))
+                except HomeAssistantError:
+                    if m["status"] == "active":     # nergens van het toestel: begin terugdraaien, anders ziet niemand dat ze actief is
+                        m["valid_from"] = old_from
+                        await self.reg.save()
+                    raise
             elif waiting:
                 m["until"] = m["valid_from"]
+                await self.reg.save()
+            elif m["status"] == "blocked" and m.get("until") and dt_util.parse_datetime(m["until"]) < vfrom:
+                m["until"] = m["valid_from"]        # blokkering eindigt voor het begin: pas bij het begin actief
                 await self.reg.save()
         elif waiting:
             await self.unblock(cid, user, "geldig vanaf nu")
@@ -492,37 +520,63 @@ class Manager:
     @callback
     def start(self):
         self._unsub = async_track_time_interval(self.hass, self._tick, timedelta(minutes=1))
+        self._unsub_ev = self.hass.bus.async_listen(EVENT_UNLOCK, self._on_unlock)
 
     @callback
     def stop(self):
         if self._unsub:
             self._unsub()
             self._unsub = None
+        if getattr(self, "_unsub_ev", None):
+            self._unsub_ev()
+            self._unsub_ev = None
+
+    @staticmethod
+    def _expired(m, now) -> bool:
+        vu = dt_util.parse_datetime(m["valid_until"]) if m.get("valid_until") else None
+        # ook uit dienst maar nog op een deur (die deur was offline bij het einde): opnieuw proberen
+        return vu is not None and vu <= now and (m.get("status") != "retired" or bool(m.get("doors")))
+
+    @staticmethod
+    def _due(m, now) -> bool:
+        until = dt_util.parse_datetime(m["until"]) if m.get("status") == "blocked" and m.get("until") else None
+        return until is not None and until <= now
+
+    async def _expire(self, cid: str, quiet: bool):
+        """Onder het schrijfslot: opnieuw nakijken (een beheerder kan intussen verlengd hebben), dan uit dienst."""
+        m = self.reg.managed.get(cid)
+        if m is None or not self._expired(m, dt_util.utcnow()):
+            return None
+        vu = dt_util.parse_datetime(m["valid_until"])
+        return await self.block(cid, None, "planner", True, "einde geldigheid " + dt_util.as_local(vu).strftime("%d/%m/%Y %H:%M"), quiet)
+
+    async def _release(self, cid: str, quiet: bool):
+        m = self.reg.managed.get(cid)
+        if m is None or not self._due(m, dt_util.utcnow()):
+            return None
+        start = bool(m.get("valid_from")) and m.get("until") == m.get("valid_from")
+        return await self.unblock(cid, "planner", "begin geldigheid" if start else "automatisch gedeblokkeerd", quiet, True)
 
     async def _tick(self, _now=None):
         now = dt_util.utcnow()
         for cid, m in list(self.reg.managed.items()):
-            vu = dt_util.parse_datetime(m["valid_until"]) if m.get("valid_until") else None
-            if vu is not None and vu <= now and m.get("status") != "retired":
+            if self._expired(m, now):
                 key = "einde_" + cid
                 first = key not in self._warned
                 try:
-                    await self.guarded(self.block, cid, None, "planner", True,
-                                       "einde geldigheid " + dt_util.as_local(vu).strftime("%d/%m/%Y %H:%M"))
+                    await self.guarded(self._expire, cid, not first)
                     self._warned.discard(key)
                 except HomeAssistantError as e:
                     if first:
                         self._warned.add(key)
                         _LOGGER.error("Code %s na het einde van de geldigheid uit dienst halen mislukt, nieuwe poging elke minuut: %s", m.get("name"), e)
                 continue
-            until = dt_util.parse_datetime(m["until"]) if m.get("status") == "blocked" and m.get("until") else None
-            if until is None or until > now:
+            if not self._due(m, now):
                 continue
             first = cid not in self._warned
             try:
                 # eerste poging met melding; daarna stil elke minuut opnieuw, tot het lukt
-                start = bool(m.get("valid_from")) and m.get("until") == m.get("valid_from")
-                await self.guarded(self.unblock, cid, "planner", "begin geldigheid" if start else "automatisch gedeblokkeerd", not first)
+                await self.guarded(self._release, cid, not first)
                 if not first:
                     self.notify(f"'{m.get('name')}' is alsnog automatisch gedeblokkeerd.", cid)
                 self._warned.discard(cid)
@@ -530,6 +584,36 @@ class Manager:
                 if first:
                     self._warned.add(cid)
                     _LOGGER.error("Automatisch deblokkeren van %s mislukt, nieuwe poging elke minuut: %s", m.get("name"), e)
+
+    # ---------- eenmalige codes ----------
+
+    @callback
+    def _on_unlock(self, event):
+        """Na een geslaagde opening met een code met een maximum aantal keer: tellen, en uit dienst bij het maximum."""
+        d = event.data or {}
+        if not d.get("opened") or not str(d.get("method", "")).startswith("code"):
+            return
+        name = d.get("name")
+        for cid, m in self.reg.managed.items():
+            if m.get("kind") == "code" and m.get("max_uses") and m.get("status") == "active" and m.get("name") == name:
+                m["uses"] = int(m.get("uses") or 0) + 1
+                if m["uses"] >= int(m["max_uses"]):
+                    self.hass.async_create_task(self._used_up(cid))
+                else:
+                    self.hass.async_create_task(self.reg.save())
+
+    async def _used_up(self, cid: str):
+        m = self.reg.managed.get(cid)
+        if m is None or m.get("status") != "active":
+            return
+        n = int(m.get("max_uses") or 1)
+        try:
+            await self.guarded(self.block, cid, None, "planner", True, "eenmalig gebruikt" if n == 1 else f"{n} keer gebruikt")
+        except HomeAssistantError as e:
+            _LOGGER.error("Code %s na gebruik uit dienst halen mislukt: %s", m.get("name"), e)
+            # zet een einde binnen de minuut: de planner probeert dan elke minuut opnieuw
+            m["valid_until"] = dt_util.utcnow().isoformat()
+            await self.reg.save()
 
 
 def validity_txt(m: dict) -> str:

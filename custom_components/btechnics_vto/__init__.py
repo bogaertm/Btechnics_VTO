@@ -357,6 +357,35 @@ def _locate(codes, name, code):
     return int(hits[0]["RecNo"]) if len(hits) == 1 else None
 
 
+def _weak(code: str) -> bool:
+    """Makkelijk te raden: allemaal hetzelfde cijfer, een oplopende of aflopende reeks, of een herhaald paar of drietal."""
+    d = [int(c) for c in code]
+    steps = {d[i + 1] - d[i] for i in range(len(d) - 1)}
+    return (len(set(d)) <= 2 or steps in ({1}, {-1}, {0})
+            or code[:2] * (len(code) // 2) == code or code[:3] * 2 == code or code[:3] == code[3:][::-1])
+
+
+def _new_code(coords, reg, length: int = 6) -> str:
+    """Willekeurige code (secrets, cryptografisch toeval) die nergens op een toestel of in het register staat."""
+    import secrets
+    taken = {r.get("CommonPassword") for c in coords.values() for r in c.codes}
+    taken |= {m.get("code") for m in reg.managed.values() if m.get("kind") == "code"}
+    for _ in range(1000):
+        code = "".join(secrets.choice("0123456789") for _ in range(length))
+        if code not in taken and not _weak(code):
+            return code
+    raise HomeAssistantError("kon geen vrije code maken")
+
+
+def _add_detail(m) -> str:
+    parts = []
+    if m.get("valid_from") or m.get("valid_until"):
+        parts.append(validity_txt(m))
+    if m.get("max_uses"):
+        parts.append("eenmalig" if int(m["max_uses"]) == 1 else f"max {m['max_uses']} keer")
+    return ", ".join(parts)
+
+
 def _as_utc(value):
     if value is None:
         return None
@@ -430,7 +459,15 @@ def _register_services(hass: HomeAssistant):
     async def _add_code(call: ServiceCall):
         coords = _all_coords(hass)
         reg = _reg()
-        name, code = call.data["name"].strip(), call.data["code"]
+        name = call.data["name"].strip()
+        code = call.data.get("code") or _new_code(coords, reg)
+        max_uses = call.data.get("max_uses")
+        if max_uses:
+            # het toestel meldt enkel de naam bij een opening: een beperkte code moet een unieke naam hebben
+            names = {(m.get("name") or "").casefold() for m in reg.managed.values()}
+            base, n = name, 2
+            while name.casefold() in names:
+                name, n = f"{base} ({n})", n + 1
         if not name:
             raise HomeAssistantError("naam mag niet leeg zijn")
         door_ids = _door_ids(coords, call.data["doors"])
@@ -448,11 +485,11 @@ def _register_services(hass: HomeAssistant):
             cid = reg._new(kind="code", name=name, secret=code, doors={}, source="home assistant")
             m = reg.managed[cid]
             m.update(status="blocked", until=vfrom.isoformat(), valid_from=vfrom.isoformat(),
-                     valid_until=vuntil.isoformat() if vuntil else None,
+                     valid_until=vuntil.isoformat() if vuntil else None, max_uses=max_uses,
                      stored={did: {"UserID": name, "CommonPassword": code} for did in door_ids})
-            reg.log(user, "toegevoegd", m, mgr.door_names(door_ids), validity_txt(m))
+            reg.log(user, "toegevoegd", m, mgr.door_names(door_ids), _add_detail(m))
             await reg.save()
-            return {"id": cid, "doors": {}, "scheduled": True}
+            return {"id": cid, "doors": {}, "scheduled": True, "code": code}
         doors = {}
         attempted = []
         try:
@@ -488,6 +525,8 @@ def _register_services(hass: HomeAssistant):
             if stuck:
                 # niet terug te draaien: toch registreren, zodat de code later via remove_code weg kan
                 sid = await reg.add(name, code, stuck)
+                reg.managed[sid].update(valid_until=vuntil.isoformat() if vuntil else None, max_uses=max_uses)
+                await reg.save()
                 msg += f" (code bleef staan op {', '.join(coords[d].door_name for d in stuck)}, id {sid})"
             if unknown:
                 msg += f" (controleer manueel of de code op {', '.join(unknown)} staat)"
@@ -496,10 +535,10 @@ def _register_services(hass: HomeAssistant):
         finally:
             for did in door_ids:
                 await coords[did].async_refresh_codes()
-        reg.managed[cid]["valid_until"] = vuntil.isoformat() if vuntil else None
-        reg.log(user, "toegevoegd", reg.managed[cid], mgr.door_names(doors), validity_txt(reg.managed[cid]) if vuntil else "")
+        reg.managed[cid].update(valid_until=vuntil.isoformat() if vuntil else None, max_uses=max_uses)
+        reg.log(user, "toegevoegd", reg.managed[cid], mgr.door_names(doors), _add_detail(reg.managed[cid]))
         await reg.save()
-        return {"id": cid, "doors": doors}
+        return {"id": cid, "doors": doors, "code": code}
 
     async def update_code(call: ServiceCall):
         return await _guarded(_update_code, call)
@@ -699,7 +738,7 @@ def _register_services(hass: HomeAssistant):
                 if row:
                     row["managed"], row["id"] = True, cid
             entries.append({"id": cid, "kind": m.get("kind"), "name": m.get("name"), "status": m.get("status"),
-                            "until": m.get("until"), "valid_from": m.get("valid_from"), "valid_until": m.get("valid_until"),
+                            "until": m.get("until"), "valid_from": m.get("valid_from"), "valid_until": m.get("valid_until"), "max_uses": m.get("max_uses"), "uses": m.get("uses") or 0,
                             "doors": sorted(m.get("doors", {})), "stored": sorted(m.get("stored", {}))})
         out = {"codes": sorted(rows.values(), key=lambda x: x["name"].lower()),
                "beheer": sorted(entries, key=lambda x: (x["name"] or "").lower()), "registry": reg.export()}
@@ -770,9 +809,10 @@ def _register_services(hass: HomeAssistant):
         vol.Optional("ntp_server", default="be.pool.ntp.org"): cv.string}), supports_response=SupportsResponse.OPTIONAL)
     # Alles wat codes, badges of het logboek leest of wijzigt: enkel voor beheerders.
     async_register_admin_service(hass, DOMAIN, "add_code", add_code, vol.Schema({
-        vol.Required("name"): cv.string, vol.Required("code"): CODE_SCHEMA,
+        vol.Required("name"): cv.string, vol.Optional("code"): CODE_SCHEMA,
         vol.Required("doors"): vol.All(cv.ensure_list, [cv.string]),
-        vol.Optional("valid_from"): cv.datetime, vol.Optional("valid_until"): cv.datetime}), supports_response=SupportsResponse.OPTIONAL)
+        vol.Optional("valid_from"): cv.datetime, vol.Optional("valid_until"): cv.datetime,
+        vol.Optional("max_uses"): vol.All(vol.Coerce(int), vol.Range(min=1, max=100))}), supports_response=SupportsResponse.OPTIONAL)
     async_register_admin_service(hass, DOMAIN, "update_code", update_code, vol.Schema({
         vol.Required("id"): cv.string, vol.Optional("name"): cv.string, vol.Optional("code"): CODE_SCHEMA,
         vol.Optional("doors"): vol.All(cv.ensure_list, [cv.string])}), supports_response=SupportsResponse.OPTIONAL)
@@ -794,10 +834,15 @@ def _register_services(hass: HomeAssistant):
         door_ids = _door_ids(coords, [call.data["door"]])
         user = await mgr.user_name(call.context)
         c = coords[door_ids[0]]
-        # enkel het slot van die deur (in _run), niet het schrijfslot: openen wacht niet op een codewijziging elders
-        await _exec(c, lambda client: client.open_door())
-        _LOGGER.warning("Deur %s op afstand geopend door %s", c.door_name, user)
         reg = _reg()
+        # enkel het slot van die deur (in _run), niet het schrijfslot: openen wacht niet op een codewijziging elders
+        try:
+            await _exec(c, lambda client: client.open_door())
+        except HomeAssistantError as e:
+            reg.log(user, "deur openen mislukt", {"kind": "deur", "name": c.door_name}, [c.door_name], str(e)[:200])
+            await reg.save()
+            raise
+        _LOGGER.warning("Deur %s op afstand geopend door %s", c.door_name, user)
         reg.log(user, "deur geopend op afstand", {"kind": "deur", "name": c.door_name}, [c.door_name])
         await reg.save()
         hass.bus.async_fire(f"{DOMAIN}_remote_open", {"door": c.door_name, "door_id": c.door_id, "user": user})
@@ -823,7 +868,7 @@ def _register_services(hass: HomeAssistant):
 
     async def restore(call: ServiceCall):
         user = await mgr.user_name(call.context)
-        return await mgr.guarded(mgr.unblock, call.data["id"], user, "hersteld")
+        return await mgr.guarded(mgr.unblock, call.data["id"], user, "hersteld", False, True)
 
     async def forget(call: ServiceCall):
         user = await mgr.user_name(call.context)
