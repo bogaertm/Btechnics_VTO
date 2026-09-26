@@ -11,6 +11,7 @@ from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers.event import async_track_time_interval
 from homeassistant.helpers.service import async_register_admin_service
+from homeassistant.helpers.start import async_at_started
 from homeassistant.loader import async_get_integration
 from homeassistant.util import dt as dt_util
 
@@ -98,6 +99,33 @@ async def _async_register_cards(hass: HomeAssistant):
         [StaticPathConfig(CARDS_URL, str(Path(__file__).parent / "frontend"), False)]
     )
     add_extra_js_url(hass, f"{CARDS_URL}/{CARDS_FILE}?v={version}")
+    # Ook als dashboardresource: de service worker van Home Assistant bewaart per pagina een oude
+    # kopie van de HTML en toont die eerst. Een pagina die bewaard werd voor de kaarten bestonden,
+    # laadt dan het script uit de HTML niet ("Configuratiefout"). Resources komen niet uit de HTML.
+    async def _at_start(_hass):
+        await _async_ensure_resource(hass, version)
+
+    async_at_started(hass, _at_start)
+
+
+async def _async_ensure_resource(hass: HomeAssistant, version: str):
+    try:
+        lovelace = hass.data.get("lovelace")
+        resources = getattr(lovelace, "resources", None)
+        if resources is None or not hasattr(resources, "async_create_item"):
+            return   # dashboards in YAML modus: resources worden daar manueel beheerd
+        await resources.async_load()
+        base = f"{CARDS_URL}/{CARDS_FILE}"
+        url = f"{base}?v={version}"
+        mine = [r for r in resources.async_items() if str(r.get("url", "")).split("?")[0] == base]
+        if not mine:
+            await resources.async_create_item({"res_type": "module", "url": url})
+        elif mine[0].get("url") != url:
+            await resources.async_update_item(mine[0]["id"], {"res_type": "module", "url": url})
+        for extra in mine[1:]:
+            await resources.async_delete_item(extra["id"])
+    except Exception:  # noqa: BLE001  de kaarten komen dan nog altijd via de HTML
+        _LOGGER.exception("Dashboardresource voor de kaarten registreren mislukt")
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
