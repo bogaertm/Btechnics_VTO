@@ -104,6 +104,10 @@ class DoorCoordinator(DataUpdateCoordinator):
             self.info = data.get("info") or self.info
             self._last_codes_fetch = now
             self._set_clock(data.get("clock"))
+            mgr = self.hass.data.get("btechnics_vto_manager")
+            if mgr is not None:
+                # register gelijkzetten met wat nu op het toestel staat (alle codes en badges beheerbaar)
+                await mgr.adopt(self.door_id, self.codes, self.cards)
         await self._process_unlocks(data["unlocks"])
         return {"codes": len(self.codes), "cards": len(self.cards), "last_unlock": self.last_unlock}
 

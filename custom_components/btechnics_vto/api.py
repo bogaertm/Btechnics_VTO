@@ -88,9 +88,12 @@ class VTOClient:
         return {"type": t, "version": v.get("Version") if isinstance(v, dict) else v, "serial": s}
 
     def find(self, table, count=1000):
-        obj = self.call("RecordFinder.factory.create", {"name": table})["result"]
+        obj = self.call("RecordFinder.factory.create", {"name": table}).get("result")
+        if not obj:
+            raise VTOError(f"{table} kan niet gelezen worden")
         try:
-            self.call("RecordFinder.startFind", {"condition": {}}, obj)
+            if not self.call("RecordFinder.startFind", {"condition": {}}, obj).get("result"):
+                raise VTOError(f"{table} kan niet gelezen worden")
             recs = []
             while True:
                 f = self.call("RecordFinder.doFind", {"count": 100}, obj)
@@ -129,10 +132,10 @@ class VTOClient:
             raise VTOError(f"setConfig {name} geweigerd: {r.get('error')}")
 
     def codes(self):
-        return self.find(TABLE_CODES)
+        return self.find(TABLE_CODES, 100000)
 
     def cards(self):
-        return self.find(TABLE_CARDS)
+        return self.find(TABLE_CARDS, 100000)
 
     def unlocks(self, count=200):
         return self.find(TABLE_LOG, count)
@@ -145,30 +148,58 @@ class VTOClient:
     def _updater(self, table):
         return self.call("RecordUpdater.factory.instance", {"name": table})["result"]
 
-    def add_code(self, name: str, code: str) -> int:
-        obj = self._updater(TABLE_CODES)
+    def _insert(self, table: str, record: dict) -> int:
+        obj = self._updater(table)
         try:
-            r = self.call("RecordUpdater.insert", {"record": {"UserID": name, "CommonPassword": code, "VTONumber": "", "CreateTime": 0}}, obj)
+            r = self.call("RecordUpdater.insert", {"record": record}, obj)
         finally:
             self.call("RecordUpdater.destroy", None, obj)
         if not r.get("result"):
             raise VTOError(f"insert mislukt: {r.get('error')}")
         return int((r.get("params") or {}).get("recno", -1))
 
-    def update_code(self, recno: int, name: str, code: str):
-        obj = self._updater(TABLE_CODES)
+    def _update(self, table: str, recno: int, record: dict):
+        obj = self._updater(table)
         try:
-            r = self.call("RecordUpdater.update", {"recno": recno, "record": {"UserID": name, "CommonPassword": code, "VTONumber": "", "CreateTime": 0}}, obj)
+            r = self.call("RecordUpdater.update", {"recno": recno, "record": record}, obj)
         finally:
             self.call("RecordUpdater.destroy", None, obj)
         if not r.get("result"):
             raise VTOError(f"update mislukt: {r.get('error')}")
 
-    def remove_code(self, recno: int):
-        obj = self._updater(TABLE_CODES)
+    def _remove(self, table: str, recno: int):
+        obj = self._updater(table)
         try:
             r = self.call("RecordUpdater.remove", {"recno": recno}, obj)
         finally:
             self.call("RecordUpdater.destroy", None, obj)
         if not r.get("result"):
             raise VTOError(f"remove mislukt: {r.get('error')}")
+
+    # base: het bestaande of bewaarde record, zodat velden als VTONumber behouden blijven.
+    @staticmethod
+    def _code_record(name: str, code: str, base: dict | None) -> dict:
+        rec = {"VTONumber": "", "CreateTime": 0}
+        rec.update({k: v for k, v in (base or {}).items() if k != "RecNo"})
+        rec.update({"UserID": name, "CommonPassword": code})
+        return rec
+
+    def add_code(self, name: str, code: str, base: dict | None = None) -> int:
+        return self._insert(TABLE_CODES, self._code_record(name, code, base))
+
+    def update_code(self, recno: int, name: str, code: str, base: dict | None = None):
+        self._update(TABLE_CODES, recno, self._code_record(name, code, base))
+
+    def remove_code(self, recno: int):
+        self._remove(TABLE_CODES, recno)
+
+    # Badges: altijd het volledige record zoals het toestel het gaf (zonder RecNo), zodat
+    # deuren, geldigheid en de overige instellingen van de badge behouden blijven.
+    def add_card(self, record: dict) -> int:
+        return self._insert(TABLE_CARDS, record)
+
+    def update_card(self, recno: int, record: dict):
+        self._update(TABLE_CARDS, recno, record)
+
+    def remove_card(self, recno: int):
+        self._remove(TABLE_CARDS, recno)

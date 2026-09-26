@@ -47,6 +47,18 @@ class FakeDevice:
         for i, r in enumerate(self.log):
             r["RecNo"] = i + 1   # positioneel, zoals op het echte toestel
 
+    def add_card_rec(self, name, cardno, doors=(0,)):
+        """Badge zoals het echte toestel ze bewaart (september 2026 uitgelezen)."""
+        self.next_card_recno = getattr(self, "next_card_recno", 1)
+        rec = {"RecNo": self.next_card_recno, "CardName": name, "CardNo": cardno, "CardStatus": 0, "CardType": 0,
+               "CitizenIDNo": "", "Doors": list(doors), "DynamicCheckCode": "", "FirstEnter": False, "Handicap": False,
+               "IsValid": False, "Password": "", "PersonId": f"{self.next_card_recno:04d}", "RepeatEnterRouteTimeout": 0,
+               "TimeSections": None, "UseTime": -1, "UserID": "9999", "UserName": name, "UserType": 0,
+               "VTOPosition": "", "ValidDateEnd": "0000-00-00 00:00:00", "ValidDateStart": "0000-00-00 00:00:00"}
+        self.next_card_recno += 1
+        self.cards.append(rec)
+        return rec["RecNo"]
+
     def add_code_rec(self, name, code):
         rec = {"RecNo": self.next_code_recno, "UserID": name, "CommonPassword": code, "VTONumber": "", "CreateTime": 0}
         self.next_code_recno += 1
@@ -118,22 +130,28 @@ class FakeClient:
         self._need()
         return [dict(r) for r in self.dev.cards]
 
-    def add_code(self, name, code):
+    def add_code(self, name, code, base=None):
         self._need()
         if self.dev.fail_add:
             raise VTOError("insert mislukt")
         self.dev.calls.append(("add", name, code))
         recno = self.dev.add_code_rec(name, code)
+        if base:
+            rec = self.dev.codes[-1]
+            rec.update({k: v for k, v in base.items() if k != "RecNo"})
+            rec["UserID"], rec["CommonPassword"] = name, code
         if self.dev.raise_after_add:
             exc, self.dev.raise_after_add = self.dev.raise_after_add, None
             raise exc
         return recno
 
-    def update_code(self, recno, name, code):
+    def update_code(self, recno, name, code, base=None):
         self._need()
         self.dev.calls.append(("update", recno, name, code))
         for r in self.dev.codes:
             if r["RecNo"] == recno:
+                if base is not None:
+                    r.update({k: v for k, v in base.items() if k != "RecNo"})
                 r["UserID"], r["CommonPassword"] = name, code
                 if self.dev.raise_after_update:
                     exc, self.dev.raise_after_update = self.dev.raise_after_update, None
@@ -145,3 +163,45 @@ class FakeClient:
         self._need()
         self.dev.calls.append(("remove", recno))
         self.dev.codes = [r for r in self.dev.codes if r["RecNo"] != recno]
+        if getattr(self.dev, "raise_after_remove", None):
+            exc, self.dev.raise_after_remove = self.dev.raise_after_remove, None
+            raise exc
+        if getattr(self.dev, "offline_after_remove", False):
+            self.dev.offline_after_remove, self.dev.offline = False, True
+            raise OSError("verbinding weg")
+
+    def add_card(self, record):
+        self._need()
+        if self.dev.fail_add:
+            raise VTOError("insert mislukt")
+        self.dev.calls.append(("add_card", record.get("CardNo")))
+        if "RecNo" in record:
+            raise VTOError("RecNo hoort niet in een nieuw record")
+        self.dev.next_card_recno = getattr(self.dev, "next_card_recno", 1)
+        rec = dict(record, RecNo=self.dev.next_card_recno)
+        self.dev.next_card_recno += 1
+        self.dev.cards.append(rec)
+        if self.dev.raise_after_add:
+            exc, self.dev.raise_after_add = self.dev.raise_after_add, None
+            raise exc
+        return rec["RecNo"]
+
+    def update_card(self, recno, record):
+        self._need()
+        self.dev.calls.append(("update_card", recno))
+        for i, r in enumerate(self.dev.cards):
+            if r["RecNo"] == recno:
+                self.dev.cards[i] = dict(record, RecNo=recno)
+                return
+        raise VTOError("update mislukt")
+
+    def remove_card(self, recno):
+        self._need()
+        self.dev.calls.append(("remove_card", recno))
+        self.dev.cards = [r for r in self.dev.cards if r["RecNo"] != recno]
+        if getattr(self.dev, "raise_after_remove", None):
+            exc, self.dev.raise_after_remove = self.dev.raise_after_remove, None
+            raise exc
+        if getattr(self.dev, "offline_after_remove", False):
+            self.dev.offline_after_remove, self.dev.offline = False, True
+            raise OSError("verbinding weg")

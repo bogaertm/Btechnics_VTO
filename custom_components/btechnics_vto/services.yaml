@@ -21,7 +21,7 @@ add_code:
       selector: { object: {} }
 update_code:
   name: Code wijzigen
-  description: Wijzigt een code die via deze integratie is aangemaakt. Bestaande codes zijn vergrendeld.
+  description: Wijzigt naam, code of deuren van een code. Werkt voor alle codes, ook die al op de toestellen stonden.
   fields:
     id:
       name: Id
@@ -38,7 +38,7 @@ update_code:
       selector: { object: {} }
 remove_code:
   name: Code verwijderen
-  description: Verwijdert een code die via deze integratie is aangemaakt. Bestaande codes kunnen niet verwijderd worden.
+  description: Verwijdert een code meteen van alle toestellen, zonder ze te bewaren. Gebruik liever Uit dienst halen.
   fields:
     id:
       name: Id
@@ -87,4 +87,66 @@ sync_clock:
     ntp_server:
       name: Tijdserver
       example: be.pool.ntp.org
+      selector: { text: {} }
+block:
+  name: Code of badge blokkeren
+  description: Haalt een code of badge van alle toestellen en bewaart ze. Met een einde komt ze op dat moment vanzelf terug, zonder einde pas bij deblokkeren.
+  fields:
+    id:
+      name: Id
+      description: Id uit list_codes of de codekaart
+      required: true
+      selector: { text: {} }
+    until:
+      name: Tot
+      description: Datum en uur waarop de blokkering vanzelf stopt. Leeg laten om te blokkeren tot je deblokkeert.
+      selector: { datetime: {} }
+unblock:
+  name: Deblokkeren
+  description: Zet een geblokkeerde code of badge terug op de deuren waar ze stond.
+  fields:
+    id:
+      name: Id
+      description: Id uit list_codes of de codekaart
+      required: true
+      selector: { text: {} }
+retire:
+  name: Uit dienst halen
+  description: Haalt een code of badge van alle toestellen. Ze blijft bewaard en kan later hersteld worden.
+  fields:
+    id:
+      name: Id
+      description: Id uit list_codes of de codekaart
+      required: true
+      selector: { text: {} }
+restore:
+  name: Herstellen
+  description: Zet een code of badge die uit dienst is terug op de deuren waar ze stond.
+  fields:
+    id:
+      name: Id
+      description: Id uit list_codes of de codekaart
+      required: true
+      selector: { text: {} }
+forget:
+  name: Definitief verwijderen
+  description: Verwijdert een bewaarde code of badge die uit dienst is. Dit kan niet ongedaan gemaakt worden.
+  fields:
+    id:
+      name: Id
+      description: Id uit list_codes of de codekaart
+      required: true
+      selector: { text: {} }
+rename_badge:
+  name: Badge hernoemen
+  description: Wijzigt de naam van een badge op alle toestellen.
+  fields:
+    id:
+      name: Id
+      description: Id uit list_codes of de codekaart
+      required: true
+      selector: { text: {} }
+    name:
+      name: Naam
+      required: true
       selector: { text: {} }

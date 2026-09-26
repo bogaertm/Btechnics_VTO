@@ -362,7 +362,7 @@ async def test_toevoegen_alles_of_niets(hass, devices):
     with pytest.raises(HomeAssistantError, match="insert mislukt"):
         await call(hass, "add_code", {"name": "Half", "code": "444444", "doors": ["Cafe", "Kammerstraat"]}, True)
     assert not any(r["CommonPassword"] == "444444" for r in cafe.codes)   # teruggedraaid
-    assert coord(hass, "cafe").registry.managed == {}
+    assert own(coord(hass, "cafe").registry) == {}
 
 
 async def test_ongeldige_invoer(hass, devices):
@@ -548,7 +548,7 @@ async def test_timeout_na_opslaan_bij_toevoegen_wordt_teruggedraaid(hass, device
         await call(hass, "add_code", {"name": "Tijdelijk", "code": "777777", "doors": ["Cafe", "Kammerstraat"]}, True)
     assert not any(r["CommonPassword"] == "777777" for r in cafe.codes)
     assert not any(r["CommonPassword"] == "777777" for r in kam.codes)
-    assert coord(hass, "cafe").registry.managed == {}
+    assert own(coord(hass, "cafe").registry) == {}
     # opnieuw proberen lukt gewoon (geen spookcode achtergebleven)
     await call(hass, "add_code", {"name": "Tijdelijk", "code": "777777", "doors": ["Cafe", "Kammerstraat"]}, True)
 
@@ -575,7 +575,7 @@ async def test_timeout_na_opslaan_bij_wijzigen(hass, devices):
     await call(hass, "update_code", {"id": cid, "code": "565656"}, True)
     assert any(r["CommonPassword"] == "565656" for r in cafe.codes)
     await call(hass, "remove_code", {"id": cid})
-    assert not any(r["UserID"] == "Piet" for r in cafe.codes) and reg.managed == {}
+    assert not any(r["UserID"] == "Piet" for r in cafe.codes) and own(reg) == {}
 
 
 async def test_gelijktijdig_wijzigen_en_verwijderen_blijft_consistent(hass, devices):
@@ -638,6 +638,11 @@ async def test_onvolledige_eerste_uitlezing_geeft_geen_vloed(hass, devices, even
     assert [e["name"] for e in events] == ["Echt"]
 
 
+def own(reg):
+    """Ingangen die niet automatisch van een toestel opgenomen werden."""
+    return {k: v for k, v in reg.managed.items() if v.get("source") != "toestel"}
+
+
 async def test_update_neemt_geen_handmatige_code_over(hass, devices):
     cafe, kam = devices
     await setup_two_entries(hass)
@@ -646,11 +651,11 @@ async def test_update_neemt_geen_handmatige_code_over(hass, devices):
     with pytest.raises(HomeAssistantError, match="bestaat al"):
         await call(hass, "update_code", {"id": cid, "code": "5678", "doors": ["Cafe", "Kammerstraat"]}, True)
     reg = coord(hass, "cafe").registry
-    assert "kammerstraat" not in reg.managed[cid]["doors"]
-    kam.calls.clear()
-    await call(hass, "remove_code", {"id": cid})
-    assert kam.calls == []                    # handmatige code nooit aangeraakt
-    assert any(r["RecNo"] == hand and r["CommonPassword"] == "5678" for r in kam.codes)
+    # de handmatige code werd niet overschreven; sinds v0.4.0 is ze wel beheerbaar en hoort ze,
+    # met dezelfde naam en code, bij dezelfde ingang
+    assert any(r["RecNo"] == hand and r["CommonPassword"] == "5678" and r["UserID"] == "Jan" for r in kam.codes)
+    assert reg.managed[cid]["doors"].get("kammerstraat") == hand
+    assert [c for c in kam.calls if c[0] in ("add", "update", "remove")] == []
 
 
 async def test_terugdraaien_met_onbereikbaar_toestel_wordt_gemeld(hass, devices):

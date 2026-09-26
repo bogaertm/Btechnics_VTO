@@ -536,56 +536,238 @@ class VtoToegang extends VtoBase {
 class VtoCodes extends VtoBase {
   _init() {
     this._show = false;
+    this._q = "";
+    this._status = "active";
+    this._kind = "all";
+    this._form = null;      // { type, entry }
+    this._auditAll = false;
     this.shadowRoot.innerHTML = `<style>${BASE_CSS}
-      .filters { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 12px; }
-      .filters input { flex: 1 1 220px; }
-      td .item { display: block; }
+      .bar { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 12px; align-items: center; }
+      .bar input[type=search] { flex: 1 1 220px; min-width: 180px; }
+      .tabs { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 12px; }
       .hidden { letter-spacing: 2px; color: var(--secondary-text-color); }
+      .chip { display: inline-flex; align-items: center; gap: 4px; font-size: 0.8rem; padding: 2px 8px; border-radius: 12px;
+        background: var(--secondary-background-color); margin: 0 4px 4px 0; white-space: nowrap; }
+      .chip.stored { color: var(--secondary-text-color); border: 1px dashed var(--divider-color); background: none; }
+      .acts { display: flex; flex-wrap: wrap; gap: 6px; justify-content: flex-end; }
+      .acts button.btn { min-height: 32px; padding: 4px 10px; font-size: 0.85rem; }
+      button.btn.danger { color: var(--error-color, ${C_REFUSED}); }
+      button.btn.primary { background: var(--primary-color); color: var(--text-primary-color, #fff); border-color: var(--primary-color); }
+      .dot.blocked { background: var(--warning-color, #f4b400); }
+      .dot.retired { background: var(--disabled-text-color, #9e9e9e); }
+      .warn { color: var(--warning-color, #b06000); font-size: 0.85rem; }
+      .panel { border: 1px solid var(--divider-color); border-radius: 8px; padding: 12px; margin-bottom: 12px; display: none; }
+      .panel.on { display: block; }
+      .panel h3 { margin: 0 0 8px; font-size: 1rem; font-weight: 500; }
+      .row { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; margin-bottom: 10px; }
+      .row label { display: inline-flex; align-items: center; gap: 6px; }
+      .row input[type=text] { min-width: 220px; }
+      .msg { margin: 0 0 12px; font-size: 0.9rem; }
+      .msg.ok { color: var(--success-color, #0b8043); }
+      .audit td { font-size: 0.85rem; }
+      td.when { white-space: nowrap; font-variant-numeric: tabular-nums; }
+      td .pname { font-weight: 500; }
+      @media (max-width: 640px) {
+        table.list thead { display: none; }
+        table.list, table.list tbody, table.list tr, table.list td { display: block; width: auto; }
+        table.list tr { border-bottom: 1px solid var(--divider-color); padding: 8px 0; }
+        table.list td { border: 0; padding: 2px 0; }
+        table.list td.kind, table.list td.kind + td { display: inline-block; margin-right: 8px; }
+        .acts { justify-content: flex-start; margin-top: 6px; }
+      }
     </style>
     <ha-card>
       <div class="title">${esc(this._config.title || "Codes en badges")}</div>
-      <div class="filters">
+      <div class="bar">
         <input id="q" type="search" placeholder="Zoek persoon, code of badgenummer" autocomplete="off">
+        <select id="kind"><option value="all">Codes en badges</option><option value="code">Codes</option><option value="badge">Badges</option></select>
         <button id="toggle" class="btn"><ha-icon icon="mdi:eye" style="--mdc-icon-size:18px"></ha-icon> Codes tonen</button>
+        <button id="new" class="btn primary"><ha-icon icon="mdi:plus" style="--mdc-icon-size:18px"></ha-icon> Nieuwe code</button>
       </div>
-      <div id="sum" class="muted" style="margin-bottom:8px"></div>
+      <div class="tabs" id="tabs"></div>
+      <div id="panel" class="panel"></div>
+      <div id="msg" class="msg"></div>
       <div id="out" class="scroll"><div class="muted">Laden...</div></div>
+      <div class="title" style="margin-top:20px;font-size:1.05rem">Wijzigingen</div>
+      <div id="audit" class="scroll"></div>
     </ha-card>`;
     const $ = (id) => this.shadowRoot.getElementById(id);
     $("q").addEventListener("input", (e) => { this._q = e.target.value.trim().toLowerCase(); this._render(); });
+    $("kind").addEventListener("change", (e) => { this._kind = e.target.value; this._render(); });
     $("toggle").addEventListener("click", () => {
       this._show = !this._show;
       $("toggle").innerHTML = `<ha-icon icon="${this._show ? "mdi:eye-off" : "mdi:eye"}" style="--mdc-icon-size:18px"></ha-icon> ${this._show ? "Codes verbergen" : "Codes tonen"}`;
       this._render();
     });
+    $("new").addEventListener("click", () => this._openForm("add", null));
+    this.shadowRoot.addEventListener("click", (e) => {
+      const b = e.target.closest("[data-act]");
+      if (!b) return;
+      const entry = this._data && this._data.entries.find((x) => x.id === b.dataset.id);
+      this._action(b.dataset.act, entry);
+    });
     this._load();
   }
   async _load() {
     try {
-      this._data = await this._ws({ type: "btechnics_vto/codes" });
+      this._data = await this._ws({ type: "btechnics_vto/manage/list" });
       this._render();
     } catch (e) {
       const msg = e && e.code === "unauthorized" ? "Enkel beheerders kunnen de codes bekijken." : `Kon de codes niet laden: ${esc(e.message || e)}`;
       this.shadowRoot.getElementById("out").innerHTML = `<div class="error">${msg}</div>`;
     }
   }
+  _message(text, ok) {
+    const el = this.shadowRoot.getElementById("msg");
+    el.className = "msg " + (ok ? "ok" : "error");
+    el.textContent = text || "";
+  }
+  _statusText(e) {
+    if (e.status === "active") return "Actief";
+    if (e.status === "retired") return "Uit dienst";
+    if (!e.until) return "Geblokkeerd tot deblokkeren";
+    return "Geblokkeerd tot " + this._fmt.dateTime.format(new Date(e.until));
+  }
   _render() {
     if (!this._data) return;
-    const q = this._q || "";
-    const { doors, people } = this._data;
-    const hit = (p) => !q || p.name.toLowerCase().includes(q) ||
-      Object.values(p.codes).flat().some((c) => c.toLowerCase().includes(q)) ||
-      Object.values(p.cards).flat().some((c) => c.toLowerCase().includes(q));
-    const list = people.filter(hit);
-    const code = (v) => (this._show ? `<span class="mono">${esc(v)}</span>` : `<span class="hidden">&bull;&bull;&bull;&bull;&bull;&bull;</span>`);
-    this.shadowRoot.getElementById("sum").textContent = `${list.length} van ${people.length} personen`;
-    if (!list.length) { this.shadowRoot.getElementById("out").innerHTML = `<div class="empty">Niets gevonden</div>`; return; }
-    this.shadowRoot.getElementById("out").innerHTML = `<table><thead><tr><th>Persoon</th>
-      ${doors.map((d) => `<th>${esc(d.name)} code</th><th>${esc(d.name)} badge</th>`).join("")}</tr></thead><tbody>
-      ${list.map((p) => `<tr><td>${esc(p.name)}</td>${doors.map((d) => `
-        <td>${(p.codes[d.id] || []).map((c) => `<span class="item">${code(c)}</span>`).join("") || '<span class="muted">-</span>'}</td>
-        <td>${(p.cards[d.id] || []).map((c) => `<span class="item mono">${esc(c)}</span>`).join("") || '<span class="muted">-</span>'}</td>`).join("")}</tr>`).join("")}
-      </tbody></table>`;
+    const { entries, audit } = this._data;
+    const $ = (id) => this.shadowRoot.getElementById(id);
+    const count = (s) => entries.filter((e) => e.status === s).length;
+    const tabs = [["active", "Actief", count("active")], ["blocked", "Geblokkeerd", count("blocked")],
+      ["retired", "Uit dienst", count("retired")], ["all", "Alles", entries.length]];
+    $("tabs").innerHTML = tabs.map(([v, l, n]) => `<button class="btn ${this._status === v ? "active" : ""}" data-tab="${v}">${l} (${n})</button>`).join("");
+    $("tabs").querySelectorAll("[data-tab]").forEach((b) => b.addEventListener("click", () => { this._status = b.dataset.tab; this._render(); }));
+    const q = this._q;
+    const list = entries.filter((e) => (this._status === "all" || e.status === this._status)
+      && (this._kind === "all" || e.kind === this._kind)
+      && (!q || e.name.toLowerCase().includes(q) || String(e.secret).toLowerCase().includes(q)));
+    const sec = (e) => e.kind === "badge"
+      ? `<span class="mono">${esc(e.secret)}</span>`
+      : (this._show ? `<span class="mono">${esc(e.secret)}</span>` : `<span class="hidden">&bull;&bull;&bull;&bull;&bull;&bull;</span>`);
+    const acts = (e) => {
+      const b = (act, label, cls) => `<button class="btn ${cls || ""}" data-act="${act}" data-id="${esc(e.id)}">${label}</button>`;
+      if (e.status === "active") return b("edit", "Aanpassen") + b("block", "Blokkeren") + b("retire", "Uit dienst", "danger");
+      if (e.status === "blocked") return b("unblock", "Deblokkeren", "primary") + b("block", "Einde aanpassen") + b("edit", "Aanpassen") + b("retire", "Uit dienst", "danger");
+      return b("restore", "Herstellen", "primary") + b("edit", "Aanpassen") + b("forget", "Definitief verwijderen", "danger");
+    };
+    const dot = (e) => `<span class="dot ${e.status === "active" ? "open" : e.status}"></span>`;
+    if (!list.length) {
+      $("out").innerHTML = `<div class="empty">Niets gevonden</div>`;
+    } else {
+      $("out").innerHTML = `<table class="list"><thead><tr><th>Persoon</th><th>Soort</th><th>Code of badge</th><th>Deuren</th><th>Status</th><th></th></tr></thead><tbody>
+        ${list.map((e) => `<tr>
+          <td><span class="pname">${esc(e.name || "?")}</span></td>
+          <td class="muted kind">${e.kind === "badge" ? "badge" : "code"}</td>
+          <td>${sec(e)}</td>
+          <td>${e.doors.map((d) => `<span class="chip">${esc(d.name)}</span>`).join("")}${e.stored.map((d) => `<span class="chip stored" title="bewaard, niet op het toestel">${esc(d.name)}</span>`).join("")}</td>
+          <td><span class="status">${dot(e)}${esc(this._statusText(e))}</span>
+            ${e.status !== "active" && e.doors.length ? `<div class="warn">Nog actief op ${e.doors.map((d) => esc(d.name)).join(", ")}</div>` : ""}</td>
+          <td><div class="acts">${acts(e)}</div></td></tr>`).join("")}
+        </tbody></table>`;
+    }
+    const shown = this._auditAll ? audit : audit.slice(0, 15);
+    $("audit").innerHTML = audit.length ? `<table class="audit"><thead><tr><th>Wanneer</th><th>Wie</th><th>Actie</th><th>Persoon</th><th>Deuren</th><th>Details</th></tr></thead><tbody>
+      ${shown.map((a) => `<tr><td class="when">${this._fmt.dateTime.format(new Date(a.ts))}</td><td>${esc(a.user)}</td><td>${esc(a.action)}</td>
+        <td>${esc(a.name)} <span class="muted">(${a.kind === "badge" ? "badge" : "code"})</span></td><td class="muted">${esc((a.doors || []).join(", "))}</td>
+        <td class="muted">${esc(a.detail || "")}</td></tr>`).join("")}</tbody></table>
+      ${audit.length > 15 ? `<div class="more"><button class="btn" id="auditmore">${this._auditAll ? "Minder tonen" : `Alles tonen (${audit.length})`}</button></div>` : ""}`
+      : `<div class="muted">Nog geen wijzigingen.</div>`;
+    const am = $("auditmore");
+    if (am) am.addEventListener("click", () => { this._auditAll = !this._auditAll; this._render(); });
+  }
+  _action(act, e) {
+    if (act === "edit" || act === "block") return this._openForm(act, e);
+    if (act === "retire") return this._openForm("confirm", e, "retire",
+      `'${esc(e.name)}' uit dienst halen? De ${e.kind === "badge" ? "badge" : "code"} wordt van alle toestellen gehaald en bewaard, zodat je ze later kan herstellen.`);
+    if (act === "forget") return this._openForm("confirm", e, "forget",
+      `'${esc(e.name)}' definitief uit de lijst verwijderen? Dit kan niet ongedaan gemaakt worden. De toegangshistoriek blijft bewaard.`);
+    return this._run({ action: act, entry: e.id }, act === "unblock" ? "Gedeblokkeerd" : "Hersteld");
+  }
+  _openForm(type, e, act, text) {
+    const p = this.shadowRoot.getElementById("panel");
+    const doors = this._data.doors;
+    this._message("");
+    if (type === "confirm") {
+      p.innerHTML = `<h3>Bevestigen</h3><div class="row">${text}</div>
+        <div class="row"><button class="btn danger" id="ok">Bevestigen</button><button class="btn" id="cancel">Annuleren</button></div>`;
+      p.querySelector("#ok").addEventListener("click", () => this._run({ action: act, entry: e.id }, act === "retire" ? "Uit dienst gehaald" : "Definitief verwijderd"));
+    } else if (type === "block") {
+      const d = new Date(Date.now() + 86400000);
+      const pad = (n) => String(n).padStart(2, "0");
+      const def = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+      p.innerHTML = `<h3>${e.status === "blocked" ? "Blokkering aanpassen" : "Blokkeren"}: ${esc(e.name)}</h3>
+        <div class="row"><label><input type="radio" name="bm" value="until" checked> Tot</label><input id="until" type="datetime-local" value="${def}"></div>
+        <div class="row"><label><input type="radio" name="bm" value="manual"> Tot ik deblokkeer</label></div>
+        <div class="row muted">De ${e.kind === "badge" ? "badge" : "code"} wordt van alle toestellen gehaald en werkt meteen niet meer. Met een einddatum komt ze daarna vanzelf terug.</div>
+        <div class="row"><button class="btn primary" id="ok">Blokkeren</button><button class="btn" id="cancel">Annuleren</button></div>`;
+      p.querySelector("#ok").addEventListener("click", () => {
+        const manual = p.querySelector("input[name=bm]:checked").value === "manual";
+        const until = p.querySelector("#until").value;
+        if (!manual && !until) return this._message("Kies een datum en uur.");
+        const when = new Date(until);
+        if (!manual && !(when > new Date())) return this._message("Het einde moet in de toekomst liggen.");
+        this._run({ action: "block", entry: e.id, ...(manual ? {} : { until: when.toISOString() }) }, "Geblokkeerd");
+      });
+    } else {
+      const isNew = type === "add";
+      const isBadge = e && e.kind === "badge";
+      const active = isNew || e.status === "active";
+      const on = new Set(isNew ? [] : e.doors.map((d) => d.id));
+      p.innerHTML = `<h3>${isNew ? "Nieuwe code" : "Aanpassen: " + esc(e.name)}</h3>
+        <div class="row"><label>Naam <input id="name" type="text" value="${isNew ? "" : esc(e.name)}"></label>
+        ${isBadge ? "" : `<label>Code <input id="code" type="text" inputmode="numeric" pattern="[0-9]*" maxlength="8" placeholder="${isNew ? "4 tot 8 cijfers" : "ongewijzigd"}"></label>`}</div>
+        ${!isBadge && active ? `<div class="row">Deuren: ${doors.map((d) => `<label><input type="checkbox" value="${esc(d.id)}" ${on.has(d.id) ? "checked" : ""}> ${esc(d.name)}</label>`).join("")}</div>` : ""}
+        ${!isNew && !active ? `<div class="row muted">Deze ${isBadge ? "badge" : "code"} staat niet op de toestellen. De aanpassing wordt gebruikt bij deblokkeren of herstellen.</div>` : ""}
+        <div class="row"><button class="btn primary" id="ok">Opslaan</button><button class="btn" id="cancel">Annuleren</button></div>`;
+      p.querySelector("#ok").addEventListener("click", () => {
+        const name = p.querySelector("#name").value.trim();
+        const code = p.querySelector("#code") ? p.querySelector("#code").value.trim() : "";
+        const sel = [...p.querySelectorAll("input[type=checkbox]:checked")].map((x) => x.value);
+        if (!name) return this._message("Geef een naam.");
+        if (code && !/^[0-9]{4,8}$/.test(code)) return this._message("Een code heeft 4 tot 8 cijfers.");
+        if (isNew) {
+          if (!code) return this._message("Geef een code.");
+          if (!sel.length) return this._message("Kies minstens een deur.");
+          return this._run({ action: "add", name, code, doors: sel }, "Code toegevoegd");
+        }
+        if (isBadge) return this._run({ action: "rename_badge", entry: e.id, name }, "Aangepast");
+        const msg = { action: "update", entry: e.id };
+        if (name !== e.name) msg.name = name;
+        if (code) msg.code = code;
+        if (active) {
+          if (!sel.length) return this._message("Kies minstens een deur. Wil je de code overal weg, gebruik dan Uit dienst.");
+          const now = e.doors.map((d) => d.id).sort().join(",");
+          if (sel.slice().sort().join(",") !== now) msg.doors = sel;
+        }
+        if (Object.keys(msg).length === 2) return this._message("Er is niets gewijzigd.");
+        this._run(msg, "Aangepast");
+      });
+    }
+    p.querySelector("#cancel").addEventListener("click", () => this._closeForm());
+    p.classList.add("on");
+    p.scrollIntoView({ block: "nearest" });
+  }
+  _closeForm() {
+    const p = this.shadowRoot.getElementById("panel");
+    p.classList.remove("on");
+    p.innerHTML = "";
+  }
+  async _run(msg, okText) {
+    if (this._busy) return;
+    this._busy = true;
+    this.shadowRoot.querySelectorAll("button").forEach((b) => { b.disabled = true; });
+    this._message("Bezig...", true);
+    try {
+      await this._ws({ type: "btechnics_vto/manage/action", ...msg });
+      this._closeForm();
+      this._message(okText, true);
+    } catch (e) {
+      this._message(`Niet gelukt: ${e.message || e}`);
+    } finally {
+      this._busy = false;
+      await this._load();
+      this.shadowRoot.querySelectorAll("button").forEach((b) => { b.disabled = false; });
+    }
   }
   getCardSize() {
     return 10;

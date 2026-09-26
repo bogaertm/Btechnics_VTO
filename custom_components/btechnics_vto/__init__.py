@@ -19,6 +19,7 @@ from .api import VTOClient, VTOError
 from .archive import AccessArchive
 from .const import ARCHIVE_FILE, CONF_DOORS, CONF_HOST, CONF_HTTPS, CONF_PASSWORD, CONF_USERNAME, DOMAIN, LOG_FETCH_COUNT
 from .coordinator import API_ERRORS, DoorCoordinator
+from .manage import MANAGER_KEY, Manager
 from .records import rec_key
 from .registry import CodeRegistry
 from .websocket import ARCHIVE_KEY
@@ -26,7 +27,8 @@ from .websocket import async_register as async_register_websocket
 
 _LOGGER = logging.getLogger(__name__)
 PLATFORMS = ["sensor"]
-SERVICES = ["add_code", "update_code", "remove_code", "refresh", "list_codes", "list_log", "device_time", "sync_clock"]
+SERVICES = ["add_code", "update_code", "remove_code", "refresh", "list_codes", "list_log", "device_time", "sync_clock",
+            "block", "unblock", "retire", "restore", "forget", "rename_badge"]
 
 # Eén gedeeld register voor ALLE config entries en voor de hele levensduur van Home Assistant:
 # meerdere instanties op hetzelfde opslagbestand zouden elkaars codes en doorloopunten overschrijven.
@@ -142,6 +144,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     hass.data.setdefault(DOMAIN, {})[entry.entry_id] = {"coords": coords}
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     _register_services(hass)
+    # bestaande codes en badges van deze deuren meteen opnemen in het register
+    await hass.data[MANAGER_KEY].adopt_all()
     return True
 
 
@@ -154,6 +158,9 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             # zodat een lopende service en een herladen entry altijd dezelfde instantie gebruiken.
             for s in SERVICES:
                 hass.services.async_remove(DOMAIN, s)
+            mgr = hass.data.pop(MANAGER_KEY, None)
+            if mgr is not None:
+                mgr.stop()
             hass.data.pop(DOMAIN, None)
     return ok
 
@@ -199,6 +206,14 @@ def _matches(rec, name, code) -> bool:
     return rec is not None and (rec.get("UserID") or "").strip() == name and rec.get("CommonPassword") == code
 
 
+def _check_not_stored(reg, code: str, skip: str | None = None):
+    """Een code die bewaard wordt bij een geblokkeerde of uit dienst gehaalde persoon, niet opnieuw uitdelen:
+    anders kan die later niet meer teruggezet worden."""
+    for cid, m in reg.managed.items():
+        if cid != skip and m.get("kind") == "code" and m.get("stored") and m.get("code") == code:
+            raise HomeAssistantError(f"code is bewaard bij {m.get('name') or '?'} ({'uit dienst' if m.get('status') == 'retired' else 'geblokkeerd'})")
+
+
 def _safe_add(client: VTOClient, name: str, code: str) -> int:
     """Voegt enkel toe als de code nog niet op het toestel staat (verse controle, niet uit cache)."""
     for r in client.codes():
@@ -213,13 +228,14 @@ def _safe_add(client: VTOClient, name: str, code: str) -> int:
 def _safe_update(client: VTOClient, recno: int, old_name: str, old_code: str, name: str, code: str):
     """Wijzigt enkel als het record op dit RecNo nog exact de code is die de integratie aanmaakte."""
     codes = client.codes()
-    if not _matches(_find(codes, recno), old_name, old_code):
+    cur = _find(codes, recno)
+    if not _matches(cur, old_name, old_code):
         raise VTOError(f"veiligheidscontrole: RecNo {recno} is niet meer de code die de integratie aanmaakte, niets gewijzigd")
     if code != old_code:
         for r in codes:
             if r.get("CommonPassword") == code and int(r.get("RecNo", -1)) != int(recno):
                 raise CodeExists(f"code bestaat al ({(r.get('UserID') or '').strip()})")
-    client.update_code(recno, name, code)
+    client.update_code(recno, name, code, cur)
 
 
 def _safe_remove(client: VTOClient, recno: int, name: str, code: str):
@@ -281,14 +297,16 @@ def _register_services(hass: HomeAssistant):
                 "persistent_notification", "create", {"title": "Btechnics VTO: nakijken", "message": message}
             ))
 
+    mgr = Manager(hass, hass.data[REG_KEY], write_lock, lambda: _all_coords(hass))
+    hass.data[MANAGER_KEY] = mgr
+    mgr.start()
+
     async def _guarded(fn, call):
         """Schrijfactie in een eigen taak onder het schrijfslot, afgeschermd tegen annulering:
         als het script dat de service aanriep stopt, loopt de actie (en het eventuele opruimen)
-        toch volledig af en blijft het slot bezet tot het echt klaar is."""
-        async def _locked():
-            async with write_lock:
-                return await fn(call)
-        return await asyncio.shield(hass.async_create_task(_locked()))
+        toch volledig af en blijft het slot bezet tot het echt klaar is. Daarna wordt het
+        register gelijkgezet met de toestellen."""
+        return await mgr.guarded(fn, call)
 
     async def _device_codes(c):
         """Verse lijst codes van het toestel, of None als het toestel niet bereikbaar is."""
@@ -308,6 +326,7 @@ def _register_services(hass: HomeAssistant):
         if not name:
             raise HomeAssistantError("naam mag niet leeg zijn")
         door_ids = _door_ids(coords, call.data["doors"])
+        _check_not_stored(reg, code)
         # eerste controle op alle gekozen deuren vóór er iets geschreven wordt
         for did in door_ids:
             c = coords[did]
@@ -355,6 +374,8 @@ def _register_services(hass: HomeAssistant):
         finally:
             for did in door_ids:
                 await coords[did].async_refresh_codes()
+        reg.log(await mgr.user_name(call.context), "toegevoegd", reg.managed[cid], mgr.door_names(doors))
+        await reg.save()
         return {"id": cid, "doors": doors}
 
     async def update_code(call: ServiceCall):
@@ -365,8 +386,18 @@ def _register_services(hass: HomeAssistant):
         reg = _reg()
         cid = call.data["id"]
         if cid not in reg.managed:
-            raise HomeAssistantError("onbekende id: enkel codes die via de integratie zijn aangemaakt kunnen gewijzigd worden")
+            raise HomeAssistantError("onbekende id")
         m = reg.managed[cid]
+        user = await mgr.user_name(call.context)
+        if m["kind"] != "code":
+            raise HomeAssistantError("dit is een badge: gebruik rename_badge")
+        if not m["doors"]:
+            # geblokkeerd of uit dienst: enkel het bewaarde record aanpassen
+            if "doors" in call.data:
+                raise HomeAssistantError("deuren aanpassen kan pas na deblokkeren of herstellen")
+            if "name" in call.data and not call.data["name"].strip():
+                raise HomeAssistantError("naam mag niet leeg zijn")
+            return await mgr.edit_stored(cid, call.data.get("name", "").strip() or None, call.data.get("code"), user)
         old_name, old_code = m["name"], m["code"]
         orig = dict(m["doors"])
         name = call.data.get("name", old_name).strip()
@@ -374,6 +405,8 @@ def _register_services(hass: HomeAssistant):
         if not name:
             raise HomeAssistantError("naam mag niet leeg zijn")
         want = set(_door_ids(coords, call.data["doors"])) if "doors" in call.data else set(orig)
+        if code != old_code:
+            _check_not_stored(reg, code)
         if not want:
             raise HomeAssistantError("minstens één deur nodig; gebruik remove_code om de code overal te verwijderen")
         for did, recno in orig.items():
@@ -449,6 +482,16 @@ def _register_services(hass: HomeAssistant):
             for did in want | set(orig):
                 if did in coords:
                     await coords[did].async_refresh_codes()
+        parts = []
+        if name != old_name:
+            parts.append(f"naam {old_name} naar {name}")
+        if code != old_code:
+            parts.append("code gewijzigd")
+        if set(new_doors) != set(orig):
+            parts.append("deuren: " + ", ".join(mgr.door_names(new_doors)))
+        if cid in reg.managed:
+            reg.log(user, "aangepast", reg.managed[cid], mgr.door_names(new_doors), ", ".join(parts))
+            await reg.save()
         return {"id": cid, "doors": new_doors}
 
     async def remove_code(call: ServiceCall):
@@ -459,9 +502,18 @@ def _register_services(hass: HomeAssistant):
         reg = _reg()
         cid = call.data["id"]
         if cid not in reg.managed:
-            raise HomeAssistantError("onbekende id: bestaande codes kunnen niet verwijderd worden")
+            raise HomeAssistantError("onbekende id")
         m = reg.managed[cid]
+        user = await mgr.user_name(call.context)
+        if m["kind"] != "code":
+            raise HomeAssistantError("dit is een badge: gebruik retire (uit dienst)")
+        if not m["doors"]:
+            reg.log(user, "definitief verwijderd", m, mgr.door_names(m["stored"]))
+            reg.managed.pop(cid)
+            await reg.save()
+            return
         name, code, orig = m["name"], m["code"], dict(m["doors"])
+        entry_copy = dict(m)
         for did, recno in orig.items():
             if did not in coords:
                 raise HomeAssistantError(f"deur {did} is momenteel niet geladen, probeer later opnieuw")
@@ -493,6 +545,10 @@ def _register_services(hass: HomeAssistant):
                                 f"integratie gewijzigd (nu '{(rec.get('UserID') or '').strip()}') en werd NIET verwijderd. "
                                 "Kijk op het toestel na of die code nog actief mag blijven."
                             )
+            gone = [d for d in orig if d not in remaining]
+            if gone:
+                reg.log(user, "verwijderd", entry_copy, mgr.door_names(gone),
+                        ("nog op " + ", ".join(mgr.door_names(remaining))) if remaining else "")
             if remaining:
                 await reg.update(cid, name, code, remaining)
             else:
@@ -560,7 +616,7 @@ def _register_services(hass: HomeAssistant):
     async def device_time(call: ServiceCall):
         # Alleen lezen: klok van elk toestel naast de klok van Home Assistant, om tijdsverschillen op te sporen.
         out = []
-        for c in _all_coords(hass).values():
+        for c in sorted(_all_coords(hass).values(), key=lambda x: x.door_name.lower()):
             try:
                 clk = await hass.async_add_executor_job(c._run, c.client.clock)
             except API_ERRORS as e:
@@ -592,6 +648,52 @@ def _register_services(hass: HomeAssistant):
         vol.Optional("doors"): vol.All(cv.ensure_list, [cv.string])}), supports_response=SupportsResponse.OPTIONAL)
     async_register_admin_service(hass, DOMAIN, "remove_code", remove_code, vol.Schema({vol.Required("id"): cv.string}))
     hass.services.async_register(DOMAIN, "refresh", refresh)
+
+    def _until(value):
+        if value is None:
+            return None
+        if value.tzinfo is None:
+            value = value.replace(tzinfo=dt_util.get_default_time_zone())
+        value = dt_util.as_utc(value)
+        if value <= dt_util.utcnow():
+            raise HomeAssistantError("het einde van de blokkering ligt in het verleden")
+        return value
+
+    async def block(call: ServiceCall):
+        until = _until(call.data.get("until"))
+        user = await mgr.user_name(call.context)
+        return await mgr.guarded(mgr.block, call.data["id"], until, user)
+
+    async def unblock(call: ServiceCall):
+        user = await mgr.user_name(call.context)
+        return await mgr.guarded(mgr.unblock, call.data["id"], user)
+
+    async def retire(call: ServiceCall):
+        user = await mgr.user_name(call.context)
+        return await mgr.guarded(mgr.block, call.data["id"], None, user, True)
+
+    async def restore(call: ServiceCall):
+        user = await mgr.user_name(call.context)
+        return await mgr.guarded(mgr.unblock, call.data["id"], user, "hersteld")
+
+    async def forget(call: ServiceCall):
+        user = await mgr.user_name(call.context)
+        return await mgr.guarded(mgr.forget, call.data["id"], user)
+
+    async def rename_badge(call: ServiceCall):
+        name = call.data["name"].strip()
+        if not name:
+            raise HomeAssistantError("naam mag niet leeg zijn")
+        user = await mgr.user_name(call.context)
+        return await mgr.guarded(mgr.rename_badge, call.data["id"], name, user)
+
+    ID_SCHEMA = vol.Schema({vol.Required("id"): cv.string})
+    async_register_admin_service(hass, DOMAIN, "block", block, vol.Schema({
+        vol.Required("id"): cv.string, vol.Optional("until"): cv.datetime}), supports_response=SupportsResponse.OPTIONAL)
+    for _name, _fn in (("unblock", unblock), ("retire", retire), ("restore", restore), ("forget", forget)):
+        async_register_admin_service(hass, DOMAIN, _name, _fn, ID_SCHEMA, supports_response=SupportsResponse.OPTIONAL)
+    async_register_admin_service(hass, DOMAIN, "rename_badge", rename_badge, vol.Schema({
+        vol.Required("id"): cv.string, vol.Required("name"): cv.string}), supports_response=SupportsResponse.OPTIONAL)
     async_register_admin_service(hass, DOMAIN, "list_codes", list_codes, vol.Schema({
         vol.Optional("raw", default=False): cv.boolean}), supports_response=SupportsResponse.ONLY)
     async_register_admin_service(hass, DOMAIN, "list_log", list_log, vol.Schema({

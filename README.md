@@ -31,9 +31,21 @@ type: custom:btechnics-vto-codes         # codes en badges per persoon
 
 De toegangshistoriek en de codes zijn enkel zichtbaar voor beheerders.
 
-## Bescherming van bestaande codes
+## Beheer van codes en badges
 
-Codes die al op de toestellen stonden vóór de integratie werden geïnstalleerd, zijn alleen lezen. Ze kunnen via de integratie nooit gewijzigd of verwijderd worden. Enkel codes die via `btechnics_vto.add_code` zijn aangemaakt, kunnen nadien via `update_code` en `remove_code` aangepast worden, en elke schrijfactie controleert eerst op het toestel of het record nog exact die code is. De integratie bewaart daarvoor een register in `.storage/btechnics_vto_registry`.
+Alle codes en badges op de toestellen zijn beheerbaar via de kaart `btechnics-vto-codes` of via services, enkel voor beheerders.
+
+| Actie | Wat er gebeurt |
+|---|---|
+| Aanpassen | Naam, code of deuren wijzigen. Bij badges enkel de naam. |
+| Blokkeren | Van alle toestellen halen en bewaren, tot een gekozen moment (daarna vanzelf terug) of tot je deblokkeert. |
+| Uit dienst | Van alle toestellen halen en bewaren, herstelbaar. |
+| Herstellen of deblokkeren | Exact hetzelfde record terug op dezelfde deuren. |
+| Definitief verwijderen | Enkel voor codes en badges die uit dienst zijn. |
+
+Een toestel kent geen status of geldigheid voor codes, daarom wordt blokkeren gedaan door het record te verwijderen en het in Home Assistant te bewaren. Voor elke schrijfactie controleert de integratie op het toestel of het record nog exact overeenkomt. Wie wat deed, staat in het overzicht Wijzigingen op de kaart. Het register staat in `.storage/btechnics_vto_registry`.
+
+Een nieuwe badge aanmaken kan (nog) niet, bestaande badges wel beheren.
 
 ## Services
 
@@ -43,9 +55,14 @@ data:
   name: "Jan Peeters"
   code: "123456"
   doors: ["Cafe", "Kammerstraat"]
+
+service: btechnics_vto.block
+data:
+  id: "..."            # uit list_codes
+  until: "2026-10-01 08:00:00"   # weglaten = tot deblokkeren
 ```
 
-`update_code` en `remove_code` werken met de `id` die `add_code` teruggeeft (ook op te vragen via `list_codes`). `list_log` geeft het logboek rechtstreeks van de toestellen.
+Verder: `update_code`, `remove_code`, `unblock`, `retire`, `restore`, `forget`, `rename_badge`, `list_codes`, `list_log`, `device_time`, `sync_clock`. Alle services zijn enkel voor beheerders.
 
 ## Werking
 

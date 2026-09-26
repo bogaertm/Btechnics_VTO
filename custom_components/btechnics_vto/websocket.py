@@ -25,6 +25,8 @@ def async_register(hass: HomeAssistant):
     websocket_api.async_register_command(hass, ws_doors)
     websocket_api.async_register_command(hass, ws_history)
     websocket_api.async_register_command(hass, ws_codes)
+    websocket_api.async_register_command(hass, ws_manage_list)
+    websocket_api.async_register_command(hass, ws_manage_action)
 
 
 def _day_start(hass, days_back: int = 0) -> int:
@@ -121,3 +123,69 @@ def ws_codes(hass, connection, msg):
             people.setdefault(n.lower(), {"name": n, "codes": {}, "cards": {}})["cards"].setdefault(did, []).append(r.get("CardNo", ""))
     doors = [{"id": did, "name": c.door_name} for did, c in sorted(coords.items(), key=lambda x: x[1].door_name.lower())]
     connection.send_result(msg["id"], {"doors": doors, "people": sorted(people.values(), key=lambda p: p["name"].lower())})
+
+
+@websocket_api.require_admin
+@websocket_api.websocket_command({vol.Required("type"): f"{DOMAIN}/manage/list"})
+@callback
+def ws_manage_list(hass, connection, msg):
+    """Alle codes en badges met status, plus de recentste wijzigingen (enkel voor beheerders)."""
+    from .manage import MANAGER_KEY
+    from .registry import secret
+    coords = _coords(hass)
+    mgr = hass.data.get(MANAGER_KEY)
+    names = {did: c.door_name for did, c in coords.items()}
+    entries = []
+    if mgr is not None:
+        for cid, m in mgr.reg.managed.items():
+            entries.append({
+                "id": cid, "kind": m["kind"], "name": m["name"], "secret": secret(m), "status": m["status"],
+                "until": m.get("until"), "source": m.get("source"), "created": m.get("created"), "updated": m.get("updated"),
+                "doors": sorted(({"id": d, "name": names.get(d, d)} for d in m["doors"]), key=lambda x: x["name"].lower()),
+                "stored": sorted(({"id": d, "name": names.get(d, d)} for d in m["stored"]), key=lambda x: x["name"].lower()),
+            })
+    entries.sort(key=lambda e: (e["name"].lower(), e["kind"]))
+    doors = [{"id": did, "name": c.door_name} for did, c in sorted(coords.items(), key=lambda x: x[1].door_name.lower())]
+    audit = list(reversed(mgr.reg.audit[-200:])) if mgr is not None else []
+    connection.send_result(msg["id"], {"doors": doors, "entries": entries, "audit": audit})
+
+
+ACTIONS = {
+    # actie: (service, velden, antwoord)
+    "add": ("add_code", ("name", "code", "doors"), True),
+    "update": ("update_code", ("id", "name", "code", "doors"), True),
+    "rename_badge": ("rename_badge", ("id", "name"), True),
+    "block": ("block", ("id", "until"), True),
+    "unblock": ("unblock", ("id",), True),
+    "retire": ("retire", ("id",), True),
+    "restore": ("restore", ("id",), True),
+    "forget": ("forget", ("id",), True),
+    "remove": ("remove_code", ("id",), False),
+}
+
+
+@websocket_api.require_admin
+@websocket_api.websocket_command({
+    vol.Required("type"): f"{DOMAIN}/manage/action",
+    vol.Required("action"): vol.In(list(ACTIONS)),
+    vol.Optional("entry"): str,     # id van de code of badge ("id" is het berichtnummer van de WebSocket)
+    vol.Optional("name"): str,
+    vol.Optional("code"): str,
+    vol.Optional("doors"): [str],
+    vol.Optional("until"): str,
+})
+@websocket_api.async_response
+async def ws_manage_action(hass, connection, msg):
+    """Voert een beheeractie uit via de gewone services (zelfde controles, logboek met de gebruiker)."""
+    from homeassistant.exceptions import HomeAssistantError
+    service, fields, response = ACTIONS[msg["action"]]
+    src = {**msg, "id": msg.get("entry")}
+    data = {k: src[k] for k in fields if k in src and src[k] not in (None, "")}
+    try:
+        res = await hass.services.async_call(
+            DOMAIN, service, data, blocking=True, context=connection.context(msg), return_response=response
+        )
+    except (HomeAssistantError, vol.Invalid) as e:
+        connection.send_error(msg["id"], "failed", str(e))
+        return
+    connection.send_result(msg["id"], {"ok": True, "result": res})
