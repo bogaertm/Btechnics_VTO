@@ -756,3 +756,19 @@ async def test_doorloopunt_van_v020_zonder_lengte(hass, devices, events, hass_st
     await setup_two_entries(hass)
     assert [e["name"] for e in events] == ["NaUpgrade"]
     assert hass_storage[STORAGE_KEY]["data"]["log_state"]["cafe"]["len"] == 31
+
+
+async def test_codes_en_logboek_enkel_voor_beheerders(hass, devices, hass_read_only_user):
+    import pytest
+    from homeassistant.core import Context
+    from homeassistant.exceptions import Unauthorized
+    await setup_two_entries(hass)
+    ctx = Context(user_id=hass_read_only_user.id)
+    for svc, data in (("list_codes", {}), ("list_log", {}), ("device_time", {}),
+                      ("add_code", {"name": "X", "code": "123456", "doors": ["Cafe"]}),
+                      ("remove_code", {"id": "x"}), ("update_code", {"id": "x"})):
+        with pytest.raises(Unauthorized):
+            await hass.services.async_call(DOMAIN, svc, data, blocking=True, context=ctx,
+                                           return_response=svc in ("list_codes", "list_log", "device_time"))
+    raw = (await call(hass, "list_codes", {"raw": True}, True))["ruw"]
+    assert raw["Cafe"]["codes"][0]["CommonPassword"] == "936100" and "badges" in raw["Cafe"]
