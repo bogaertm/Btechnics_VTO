@@ -52,6 +52,7 @@ async def ws_doors(hass, connection, msg):
     if archive is not None:
         today = await hass.async_add_executor_job(archive.counts_since, _day_start(hass))
         stats = await hass.async_add_executor_job(archive.stats)
+    photos = hass.data.get(f"{DOMAIN}_photos")
     doors = []
     for did, c in sorted(_coords(hass).items(), key=lambda x: x[1].door_name.lower()):
         doors.append({
@@ -61,6 +62,7 @@ async def ws_doors(hass, connection, msg):
             # zonder kaartnummers: dit commando is voor elke gebruiker
             "last_unlock": _no_card(c.last_unlock),
             "recent": [_no_card(r) for r in c.recent[:10]],
+            "events": getattr(c, "events_state", None),
             "codes": len(c.codes),
             "cards": len(c.cards),
             "today": today.get(did, {"opened": 0, "refused": 0}),
@@ -69,6 +71,24 @@ async def ws_doors(hass, connection, msg):
                 for k, u in (("last_unlock", "last_unlock"), ("codes", "codes"), ("cards", "cards"))
             },
         })
+    if photos is not None:
+        # foto's koppelen aan de recente toegangen (enkel het nummer; de foto zelf is enkel voor beheerders)
+        rows = [r for d in doors for r in d["recent"] if r.get("door_id") and r.get("ts")]
+        try:
+            await hass.async_add_executor_job(photos.match, rows)
+            for d in doors:
+                u = d["last_unlock"]
+                if u:
+                    same = next((r for r in d["recent"] if r.get("ts") == u.get("ts") and "photo" in r), None)
+                    if same:
+                        u["photo"] = same["photo"]
+                    elif u.get("ts"):
+                        one = [dict(u)]
+                        await hass.async_add_executor_job(photos.match, one)
+                        if "photo" in one[0]:
+                            u["photo"] = one[0]["photo"]
+        except Exception:  # noqa: BLE001  foto's zijn een extraatje
+            pass
     connection.send_result(msg["id"], {"doors": doors, "archive": stats, "time_zone": hass.config.time_zone})
 
 
@@ -107,7 +127,15 @@ async def ws_history(hass, connection, msg):
         connection.send_error(msg["id"], "invalid_format", f"ongeldige datum: {e}")
         return
     t0 = time.monotonic()
-    res = await hass.async_add_executor_job(lambda: archive.query(tz, **kw))
+    photos = hass.data.get(f"{DOMAIN}_photos")
+
+    def _q():
+        r = archive.query(tz, **kw)
+        if photos is not None:
+            photos.match(r["rows"])
+        return r
+
+    res = await hass.async_add_executor_job(_q)
     res["query_ms"] = int((time.monotonic() - t0) * 1000)
     connection.send_result(msg["id"], res)
 

@@ -64,6 +64,14 @@ data:
 
 Verder: `add_badge`, `update_code`, `remove_code`, `unblock`, `retire`, `restore`, `forget`, `rename_badge`, `list_codes`, `list_log`, `device_time`, `sync_clock`. Alle services zijn enkel voor beheerders.
 
+## Foto bij elke toegang
+
+Elk toestel meldt een toegang meteen via poort 5000 (hetzelfde protocol als de Dahua-apps). Op dat moment neemt Home Assistant een foto van de camera van het toestel: via `snapshot.cgi` als het toestel die heeft, anders een beeld uit de RTSP-stroom (poort 554) met ffmpeg. Het logboek wordt dan ook meteen ingelezen in plaats van pas bij de volgende uitlezing.
+
+Foto's staan verkleind in `btechnics_vto_fotos` in de configmap, zijn enkel zichtbaar voor beheerders (camera-icoon in de historiek, miniatuur bij de laatste toegang) en worden na 30 dagen gewist. De Belgische camerawet laat camerabeelden maximaal een maand bewaren tenzij ze nodig zijn als bewijs; hou het register van de beeldverwerkingsactiviteiten bij en voorzie het pictogram.
+
+Diagnose: `btechnics_vto.camera_probe` test per toestel de foto (CGI en RTSP) en de gebeurtenissen.
+
 ## Werking
 
 De integratie spreekt de VTO's aan via dezelfde RPC2 interface als hun eigen webinterface (RecordFinder en RecordUpdater op de tabellen AccessControlCommonPassword, AccessControlCard en AccessControlCardRec). Logboek elke 30 seconden, codes en badges elke 5 minuten.

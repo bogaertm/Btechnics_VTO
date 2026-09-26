@@ -6,6 +6,7 @@ from datetime import timedelta
 from pathlib import Path
 
 import voluptuous as vol
+from homeassistant.components.http import KEY_HASS, HomeAssistantView
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, ServiceCall, SupportsResponse
 from homeassistant.exceptions import HomeAssistantError
@@ -20,6 +21,8 @@ from .api import VTOClient, VTOError
 from .archive import AccessArchive
 from .const import ARCHIVE_FILE, CONF_DOORS, CONF_HOST, CONF_HTTPS, CONF_PASSWORD, CONF_USERNAME, DOMAIN, LOG_FETCH_COUNT
 from .coordinator import API_ERRORS, DoorCoordinator
+from .camera import PHOTO_DIR, DoorCamera, PhotoStore
+from .dhip import EventListener
 from .manage import MANAGER_KEY, Manager
 from .records import rec_key
 from .registry import CodeRegistry
@@ -37,6 +40,10 @@ REG_KEY = f"{DOMAIN}_shared_registry"
 REG_LOCK_KEY = f"{DOMAIN}_shared_registry_lock"
 WRITE_LOCK_KEY = f"{DOMAIN}_write_lock"
 GLOBAL_KEY = f"{DOMAIN}_global_setup"
+PHOTO_KEY = f"{DOMAIN}_photos"
+PHOTO_URL = "/api/btechnics_vto/foto"
+# Realtime gebeurtenissen (DHIP, poort 5000) en foto's. In de tests uitgeschakeld (geen netwerk).
+EVENTS_ENABLED = True
 CARDS_URL = "/btechnics_vto_static"
 CARDS_FILE = "btechnics-vto-cards.js"
 
@@ -72,6 +79,14 @@ async def _async_global_setup(hass: HomeAssistant) -> AccessArchive:
             archive = None
         if archive is not None:
             hass.data[ARCHIVE_KEY] = archive
+            try:
+                photos = await hass.async_add_executor_job(
+                    PhotoStore, hass.config.path(ARCHIVE_FILE), hass.config.path(PHOTO_DIR))
+                hass.data[PHOTO_KEY] = photos
+                if getattr(hass, "http", None) is not None:
+                    hass.http.register_view(PhotoView(photos))
+            except Exception:  # noqa: BLE001  foto's zijn optioneel
+                _LOGGER.exception("Fotomap kon niet geopend worden; toegangen werken verder zonder foto's")
         async_register_websocket(hass)
         await _async_register_cards(hass)
 
@@ -80,6 +95,11 @@ async def _async_global_setup(hass: HomeAssistant) -> AccessArchive:
                 n = await hass.async_add_executor_job(archive.prune)
                 if n:
                     _LOGGER.info("Toegangsarchief: %s oude records opgeruimd", n)
+                photos = hass.data.get(PHOTO_KEY)
+                if photos is not None:
+                    n = await hass.async_add_executor_job(photos.prune)
+                    if n:
+                        _LOGGER.info("Foto's: %s foto's ouder dan de bewaartermijn gewist", n)
             except Exception:  # noqa: BLE001
                 _LOGGER.exception("Toegangsarchief opruimen mislukt")
 
@@ -143,6 +163,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         await reg.snapshot_protected(door["id"], [r["RecNo"] for r in c.codes])
         coords[door["id"]] = c
     hass.data.setdefault(DOMAIN, {})[entry.entry_id] = {"coords": coords}
+    if EVENTS_ENABLED:
+        for c in coords.values():
+            _start_events(hass, entry, c)
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     _register_services(hass)
     # bestaande codes en badges van deze deuren meteen opnemen in het register
@@ -174,6 +197,64 @@ async def async_remove_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
         await reg.forget_door(door["id"])
         if archive is not None:
             await hass.async_add_executor_job(archive.detach_door, door["id"])
+
+
+def _start_events(hass: HomeAssistant, entry: ConfigEntry, c):
+    """Realtime: bij elke toegang meteen een foto nemen en het logboek opnieuw inlezen."""
+    import json
+    from urllib.parse import urlparse
+    cam = c.camera = DoorCamera(hass, c)
+    c.events_state = {"ok": None, "fout": None}
+
+    async def _on_access(ev):
+        data = ev.get("Data") or {}
+        info = json.dumps({k: data.get(k) for k in ("Method", "Status", "UserID", "Name") if k in data})
+        photos = hass.data.get(PHOTO_KEY)
+        if photos is not None and cam.may_shoot():
+            t = int(time.time())
+            try:
+                img = await cam.grab()
+                await hass.async_add_executor_job(photos.save, c.door_id, t, img, info)
+            except Exception as e:  # noqa: BLE001  geen foto: de toegang zelf gaat gewoon verder
+                _LOGGER.warning("Foto bij toegang op %s mislukt: %s", c.door_name, e)
+        # logboek meteen inlezen (anders pas bij de volgende uitlezing, tot 30 s later)
+        await c.async_request_refresh()
+
+    def on_event(ev):   # draait in de luisterthread
+        if ev.get("Code") == "AccessControl":
+            asyncio.run_coroutine_threadsafe(_on_access(ev), hass.loop)
+
+    def on_state(ok, err=None):
+        c.events_state = {"ok": ok, "fout": err}
+
+    host = urlparse(c.client.base).hostname
+    listener = EventListener(c.door_id, host, c.client.user, c.client._pw, on_event, on_state)
+    listener.start()
+    entry.async_on_unload(listener.stop)
+
+
+class PhotoView(HomeAssistantView):
+    """Foto van een toegang, enkel voor beheerders (via een ondertekend pad vanuit de kaart)."""
+
+    url = PHOTO_URL + "/{photo_id}"
+    name = "api:btechnics_vto:foto"
+    requires_auth = True
+
+    def __init__(self, photos: PhotoStore):
+        self.photos = photos
+
+    async def get(self, request, photo_id: str):
+        from aiohttp import web
+        user = request.get("hass_user")
+        if user is None or not user.is_admin:
+            return web.Response(status=403, text="Enkel voor beheerders")
+        if not photo_id.isdigit():
+            return web.Response(status=404)
+        hass = request.app[KEY_HASS]
+        path = await hass.async_add_executor_job(self.photos.path, int(photo_id))
+        if path is None:
+            return web.Response(status=404, text="Foto niet (meer) beschikbaar")
+        return web.FileResponse(path, headers={"Cache-Control": "private, max-age=86400"})
 
 
 def _all_coords(hass):

@@ -18,14 +18,75 @@ function errText(e) {
   return String(e);
 }
 
+const DAYS = ["Zo", "Ma", "Di", "Wo", "Do", "Vr", "Za"];
+
+// Datums als "Za 13 sep 2026" en uren als "23u14", altijd in de tijdzone van Home Assistant.
 function formatters(tz) {
-  const o = { timeZone: tz || undefined };
-  return {
-    dateTime: new Intl.DateTimeFormat("nl-BE", { ...o, day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit" }),
-    date: new Intl.DateTimeFormat("nl-BE", { ...o, weekday: "short", day: "2-digit", month: "2-digit", year: "numeric" }),
-    time: new Intl.DateTimeFormat("nl-BE", { ...o, hour: "2-digit", minute: "2-digit", second: "2-digit" }),
-    short: new Intl.DateTimeFormat("nl-BE", { ...o, day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" }),
+  const nf = new Intl.DateTimeFormat("en-US", { timeZone: tz || undefined, year: "numeric", month: "numeric", day: "numeric",
+    hour: "numeric", minute: "numeric", second: "numeric", hourCycle: "h23" });
+  const parts = (d) => {
+    const p = {};
+    for (const x of nf.formatToParts(d)) if (x.type !== "literal") p[x.type] = Number(x.value);
+    if (p.hour === 24) p.hour = 0;
+    p.wd = new Date(Date.UTC(p.year, p.month - 1, p.day)).getUTCDay();
+    return p;
   };
+  const two = (n) => String(n).padStart(2, "0");
+  const date = (p) => `${DAYS[p.wd]} ${p.day} ${MONTHS[p.month - 1]} ${p.year}`;
+  const time = (p) => `${two(p.hour)}u${two(p.minute)}`;
+  return {
+    dateTime: { format: (d) => { const p = parts(d); return `${date(p)}, ${time(p)}`; } },
+    date: { format: (d) => date(parts(d)) },
+    time: { format: (d) => time(parts(d)) },
+    short: { format: (d) => { const p = parts(d); return `${date(p)}, ${time(p)}`; } },
+    // CSV: gewone notatie die Excel herkent
+    csvDate: { format: (d) => { const p = parts(d); return `${two(p.day)}/${two(p.month)}/${p.year}`; } },
+    csvTime: { format: (d) => { const p = parts(d); return `${two(p.hour)}:${two(p.minute)}:${two(p.second)}`; } },
+  };
+}
+
+/* Foto's bij een toegang: enkel voor beheerders, via een ondertekend pad (een <img> kan geen token meesturen). */
+const PHOTO_SRC = new Map();
+async function photoSrc(hass, id) {
+  const hit = PHOTO_SRC.get(id);
+  if (hit && hit.until > Date.now()) return hit.path;
+  const r = await hass.callWS({ type: "auth/sign_path", path: `/api/btechnics_vto/foto/${id}`, expires: 3600 });
+  PHOTO_SRC.set(id, { path: r.path, until: Date.now() + 3000 * 1000 });
+  return r.path;
+}
+function isAdmin(hass) {
+  return !!(hass && hass.user && hass.user.is_admin);
+}
+function photoBtn(hass, x, cap) {
+  if (!x.photo || !isAdmin(hass)) return "";
+  return `<button class="photo" data-photo="${esc(x.photo)}" data-cap="${esc(cap)}" title="Foto bekijken" aria-label="Foto bekijken"><ha-icon icon="mdi:camera"></ha-icon></button>`;
+}
+async function openPhoto(root, hass, id, cap) {
+  closePhoto(root);
+  const lb = document.createElement("div");
+  lb.className = "lb";
+  lb.innerHTML = `<figure><div class="lbimg muted">Foto laden...</div><figcaption>${esc(cap || "")}</figcaption>
+    <button class="btn" id="lbclose">Sluiten</button></figure>`;
+  lb.addEventListener("click", (e) => { if (e.target === lb || e.target.id === "lbclose") closePhoto(root); });
+  root.appendChild(lb);
+  root._lbKey = (e) => { if (e.key === "Escape") closePhoto(root); };
+  document.addEventListener("keydown", root._lbKey);
+  try {
+    const src = await photoSrc(hass, id);
+    const img = new Image();
+    img.alt = cap || "Foto";
+    img.onload = () => { const box = lb.querySelector(".lbimg"); if (box) box.replaceWith(img); };
+    img.onerror = () => { const box = lb.querySelector(".lbimg"); if (box) box.textContent = "Foto niet (meer) beschikbaar."; };
+    img.src = src;
+  } catch (e) {
+    const box = lb.querySelector(".lbimg");
+    if (box) box.textContent = `Foto laden mislukt: ${errText(e)}`;
+  }
+}
+function closePhoto(root) {
+  const lb = root.querySelector(".lb");
+  if (lb) lb.remove();
+  if (root._lbKey) { document.removeEventListener("keydown", root._lbKey); root._lbKey = null; }
 }
 
 const BASE_CSS = `
@@ -55,6 +116,16 @@ const BASE_CSS = `
   button.btn:hover { border-color: var(--primary-color); }
   button.btn.active { border-color: var(--primary-color); color: var(--primary-color); }
   .scroll { overflow-x: auto; max-width: 100%; }
+  button.photo { background: none; border: 0; padding: 0 2px; cursor: pointer; color: var(--secondary-text-color); --mdc-icon-size: 18px; vertical-align: middle; }
+  button.photo:hover, button.photo:focus-visible { color: var(--primary-color); }
+  .lb { position: fixed; inset: 0; z-index: 10; background: rgba(0, 0, 0, 0.75); display: flex; align-items: center; justify-content: center; padding: 16px; }
+  .lb figure { margin: 0; background: var(--card-background-color, #fff); border-radius: 12px; padding: 12px; max-width: min(920px, 100%);
+    display: flex; flex-direction: column; gap: 8px; align-items: center; }
+  .lb img { max-width: 100%; max-height: 75vh; border-radius: 8px; display: block; }
+  .lb .lbimg { min-width: 240px; min-height: 120px; display: flex; align-items: center; justify-content: center; }
+  .lb figcaption { color: var(--primary-text-color); font-size: 0.95rem; text-align: center; }
+  button.thumb { border: 0; padding: 0; background: none; cursor: pointer; flex: none; }
+  button.thumb img { width: 88px; height: 50px; object-fit: cover; border-radius: 8px; display: block; }
 `;
 
 class VtoBase extends HTMLElement {
@@ -62,6 +133,12 @@ class VtoBase extends HTMLElement {
     super();
     this.attachShadow({ mode: "open" });
     this._config = {};
+    this.shadowRoot.addEventListener("click", (e) => {
+      const p = e.target.closest("[data-photo]");
+      if (!p) return;
+      e.stopPropagation();
+      openPhoto(this.shadowRoot, this._hass, p.dataset.photo, p.dataset.cap);
+    });
   }
   setConfig(config) {
     this._config = config || {};
@@ -154,6 +231,9 @@ class VtoOverzicht extends VtoBase {
       return;
     }
     body.innerHTML = `<div class="doors">${doors.map((d) => this._door(d, f)).join("")}</div>`;
+    body.querySelectorAll("img[data-thumb]").forEach(async (img) => {
+      try { img.src = await photoSrc(this._hass, img.dataset.thumb); } catch (e) { img.closest("button").remove(); }
+    });
     const a = this._data.archive || {};
     const first = Object.values(a).map((x) => x.first).filter(Boolean).sort()[0];
     this.shadowRoot.getElementById("foot").textContent = first
@@ -173,12 +253,15 @@ class VtoOverzicht extends VtoBase {
         <td class="muted" style="white-space:nowrap">${f.short.format(new Date(r.ts * 1000))}</td>
         <td>${r.name === "?" ? '<span class="muted">onbekende code</span>' : esc(r.name)}</td>
         <td class="muted">${esc(r.method)}</td>
-        <td><span class="status"><span class="dot ${r.opened ? "open" : "refused"}"></span>${r.opened ? "Geopend" : "Geweigerd"}</span></td></tr>`).join("");
+        <td><span class="status"><span class="dot ${r.opened ? "open" : "refused"}"></span>${r.opened ? "Geopend" : "Geweigerd"}${photoBtn(this._hass, r, `${r.name === "?" ? "Onbekende code" : r.name}, ${d.name}, ${f.dateTime.format(new Date(r.ts * 1000))}`)}</span></td></tr>`).join("");
+    const thumb = u && u.photo && isAdmin(this._hass)
+      ? `<button class="thumb" data-photo="${esc(u.photo)}" data-cap="${esc(`${who}, ${d.name}, ${f.dateTime.format(new Date(u.ts * 1000))}`)}" title="Foto bekijken"><img data-thumb="${esc(u.photo)}" alt="Foto van de laatste toegang"></button>`
+      : "";
     return `<div class="door">
       <div class="head"><span class="name">${esc(d.name)}</span>
         <span class="chip ${d.available ? "" : "off"}">${d.available ? "Online" : "Offline"}</span></div>
       <div class="last"><div class="icon ${cls}"><ha-icon icon="${icon}"></ha-icon></div>
-        <div><div class="who">${esc(who)}</div><div class="muted">${sub}</div></div></div>
+        <div style="flex:1;min-width:0"><div class="who">${esc(who)}</div><div class="muted">${sub}</div></div>${thumb}</div>
       <div class="stats">
         <div class="stat"><div class="v">${d.today.opened}</div><div class="l">Vandaag geopend</div></div>
         <div class="stat"><div class="v">${d.today.refused}</div><div class="l">Vandaag geweigerd</div></div>
@@ -490,7 +573,7 @@ class VtoToegang extends VtoBase {
         <td class="when">${f.date.format(d)}</td><td class="when">${f.time.format(d)}</td><td>${esc(x.door)}</td>
         <td>${x.name === "?" ? '<button class="link muted" data-person="?">onbekende code</button>' : `<button class="link" data-person="${esc(x.name)}">${esc(x.name)}</button>`}</td>
         <td class="muted">${esc(x.method)}${x.card ? ` <span class="mono">${esc(x.card)}</span>` : ""}</td>
-        <td><span class="status"><span class="dot ${x.opened ? "open" : "refused"}"></span>${x.opened ? "Geopend" : "Geweigerd"}</span></td></tr>`; }).join("")}
+        <td><span class="status"><span class="dot ${x.opened ? "open" : "refused"}"></span>${x.opened ? "Geopend" : "Geweigerd"}${photoBtn(this._hass, x, `${x.name === "?" ? "Onbekende code" : x.name}, ${x.door}, ${f.dateTime.format(d)}`)}</span></td></tr>`; }).join("")}
       </tbody></table>`;
     if (r.rows.length < r.total) {
       more.innerHTML = `<button class="btn" id="morebtn">Meer tonen (${r.rows.length} van ${r.total.toLocaleString("nl-BE")})</button>`;
@@ -527,7 +610,7 @@ class VtoToegang extends VtoBase {
     const lines = [["Datum", "Tijd", "Deur", "Persoon", "Methode", "Badge", "Status"].map(q).join(";")];
     for (const x of rows) {
       const d = new Date(x.ts * 1000);
-      lines.push([f.date.format(d), f.time.format(d), x.door, x.name === "?" ? "onbekende code" : x.name, x.method, x.card, x.opened ? "Geopend" : "Geweigerd"].map(q).join(";"));
+      lines.push([f.csvDate.format(d), f.csvTime.format(d), x.door, x.name === "?" ? "onbekende code" : x.name, x.method, x.card, x.opened ? "Geopend" : "Geweigerd"].map(q).join(";"));
     }
     const blob = new Blob([String.fromCharCode(0xfeff) + lines.join("\r\n")], { type: "text/csv;charset=utf-8" });
     const a = document.createElement("a");
@@ -684,7 +767,7 @@ class VtoCodes extends VtoBase {
           <span><b>${r.refused.toLocaleString("nl-BE")}</b> geweigerd</span>${last ? `<span>Laatst: <b>${esc(f.dateTime.format(new Date(last.ts * 1000)))}</b></span>` : ""}</div>
         ${r.rows.length ? `<div class="scroll"><table><thead><tr><th>Wanneer</th><th>Deur</th><th>Hoe</th><th>Status</th></tr></thead><tbody>
           ${r.rows.map((x) => `<tr><td class="when">${esc(f.dateTime.format(new Date(x.ts * 1000)))}</td><td>${esc(x.door)}</td><td class="muted">${esc(x.method)}</td>
-            <td><span class="status"><span class="dot ${x.opened ? "open" : "refused"}"></span>${x.opened ? "Geopend" : "Geweigerd"}</span></td></tr>`).join("")}
+            <td><span class="status"><span class="dot ${x.opened ? "open" : "refused"}"></span>${x.opened ? "Geopend" : "Geweigerd"}${photoBtn(this._hass, x, `${name}, ${x.door}, ${f.dateTime.format(new Date(x.ts * 1000))}`)}</span></td></tr>`).join("")}
           </tbody></table></div>` : `<div class="empty">Geen toegangen in het laatste jaar.</div>`}
         ${r.rows.length < r.total ? `<div class="more"><button class="btn" id="hmore">Meer tonen (${r.rows.length} van ${r.total.toLocaleString("nl-BE")})</button></div>` : ""}`;
       el.querySelector("#hclose").addEventListener("click", () => this._closeHistory());

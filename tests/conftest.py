@@ -24,3 +24,10 @@ def clean_archive(hass):
     _rm()
     yield
     _rm()
+
+
+@pytest.fixture(autouse=True)
+def no_realtime_events(monkeypatch):
+    """Geen DHIP-verbinding in de tests (geen netwerk, geen achtergrondthreads)."""
+    import custom_components.btechnics_vto as integ
+    monkeypatch.setattr(integ, "EVENTS_ENABLED", False)
