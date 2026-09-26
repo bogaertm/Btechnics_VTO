@@ -20,3 +20,18 @@ async def test_kaarten_automatisch_beschikbaar(hass, devices, hass_client):
     # geen emoji in de kaarten
     import re
     assert not re.search("[\U0001F300-\U0001FAFF☀-➿]", body)
+
+
+async def test_kaarten_ook_als_dashboardresource(hass, devices):
+    """Een oude kopie van de pagina (service worker) mag de kaarten niet laten wegvallen."""
+    assert await async_setup_component(hass, "frontend", {})
+    await setup_two_entries(hass)
+    await hass.async_block_till_done()
+    res = hass.data["lovelace"].resources
+    mine = [r for r in res.async_items() if r["url"].startswith("/btechnics_vto_static/btechnics-vto-cards.js")]
+    assert len(mine) == 1 and mine[0]["type"] == "module" and "?v=" in mine[0]["url"]
+    # tweede keer opstarten: geen dubbele resource
+    from custom_components.btechnics_vto import _async_ensure_resource
+    await _async_ensure_resource(hass, "9.9.9")
+    mine = [r for r in res.async_items() if r["url"].startswith("/btechnics_vto_static/")]
+    assert [r["url"] for r in mine] == ["/btechnics_vto_static/btechnics-vto-cards.js?v=9.9.9"]
