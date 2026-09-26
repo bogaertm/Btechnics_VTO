@@ -68,6 +68,8 @@ class FakeDevice:
 
 class FakeClient:
     def __init__(self, host, https, username, password):
+        self.base = ("https://" if https else "http://") + host
+        self.user, self._pw = username, password
         self.dev = DEVICES[host]
         self.logged_in = False
 

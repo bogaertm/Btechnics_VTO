@@ -1,6 +1,7 @@
 """Btechnics VTO: centraal codebeheer en logboek voor Dahua VTO's."""
 import asyncio
 import logging
+import time
 from datetime import timedelta
 from pathlib import Path
 
@@ -712,10 +713,29 @@ def _register_services(hass: HomeAssistant):
     }), supports_response=SupportsResponse.OPTIONAL)
 
     async def camera_probe(call: ServiceCall):
+        from urllib.parse import quote, urlparse
+        from . import dhip
         out = []
         for c in sorted(_all_coords(hass).values(), key=lambda c: c.door_name.lower()):
+            host = urlparse(c.client.base).hostname
+            extra = {}
+            extra["dhip_5000"] = await hass.async_add_executor_job(dhip.probe, host, c.client.user, c.client._pw, 2)
+            try:
+                from homeassistant.components.ffmpeg import async_get_image
+                from homeassistant.setup import async_setup_component
+                if "ffmpeg" not in hass.config.components:
+                    await async_setup_component(hass, "ffmpeg", {})
+                url = (f"rtsp://{quote(c.client.user, safe='')}:{quote(c.client._pw, safe='')}@{host}:554"
+                       "/cam/realmonitor?channel=1&subtype=0")
+                t0 = time.monotonic()
+                img = await asyncio.wait_for(async_get_image(hass, url), 15)
+                extra["rtsp_foto"] = ({"ok": True, "bytes": len(img), "ms": int((time.monotonic() - t0) * 1000)}
+                                      if img else {"ok": False, "fout": "geen beeld"})
+            except Exception as e:  # noqa: BLE001  diagnose
+                extra["rtsp_foto"] = {"ok": False, "fout": str(e)[:200]}
             try:
                 res = await hass.async_add_executor_job(c.client.camera_probe)
+                res["realtime"] = extra
                 if "extra" in res:
                     try:
                         res["extra"]["config"] = await hass.async_add_executor_job(c._run, lambda: c.client.probe_config())
