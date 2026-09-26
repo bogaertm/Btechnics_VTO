@@ -584,3 +584,11 @@ async def test_mislukt_openen_staat_in_wijzigingen(hass, devices):
     with pytest.raises(HomeAssistantError):
         await call(hass, "open_door", {"door": "Kammerstraat"}, True)
     assert reg(hass).audit[-1]["action"] == "deur openen mislukt"
+
+
+async def test_toestel_herstarten(hass, devices):
+    _, kam = devices
+    await setup_two_entries(hass)
+    res = await call(hass, "reboot", {"door": "Kammerstraat"}, True)
+    assert res["reboot"] and getattr(kam, "reboots", 0) == 1
+    assert reg(hass).audit[-1]["action"] == "toestel herstart"

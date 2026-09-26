@@ -225,6 +225,17 @@ class VTOClient:
     def unlocks(self, count=200):
         return self.find(TABLE_LOG, count)
 
+    # ---------- herstarten ----------
+    def reboot(self):
+        """Toestel herstarten (magicBox.reboot, standaard RPC van Dahua-toestellen). Het antwoord kan
+        uitblijven omdat het toestel meteen herstart."""
+        try:
+            r = self.call("magicBox.reboot")
+        except Exception:  # noqa: BLE001  verbinding valt weg door de herstart
+            return
+        if r and r.get("result") is False:
+            raise VTOError(f"herstart geweigerd: {r.get('error')}")
+
     # ---------- deur openen ----------
     def open_door(self, channel: int = 0, short_number: str = "HA"):
         """Deur op afstand openen. Zelfde RPC als myhomeiot/DahuaVTO (dahua_vto.open_door):

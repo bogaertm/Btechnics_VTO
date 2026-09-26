@@ -93,6 +93,10 @@ class FakeClient:
         if self.dev.slow:
             time.sleep(self.dev.slow)
 
+    def reboot(self):
+        self._need()
+        self.dev.reboots = getattr(self.dev, "reboots", 0) + 1
+
     def open_door(self, channel=0, short_number="HA"):
         self._need()
         if getattr(self.dev, "refuse_open", False):

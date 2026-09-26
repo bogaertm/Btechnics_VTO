@@ -214,3 +214,13 @@ open_door:
       required: true
       example: "Cafe"
       selector: { text: {} }
+
+reboot:
+  name: Toestel herstarten
+  description: Herstart een buitenpost (enkel beheerders). Het toestel is ongeveer 2 minuten onbereikbaar. Komt in Wijzigingen.
+  fields:
+    door:
+      name: Deur
+      required: true
+      example: "Kammerstraat"
+      selector: { text: {} }

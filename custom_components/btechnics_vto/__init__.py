@@ -31,7 +31,7 @@ from .websocket import async_register as async_register_websocket
 
 _LOGGER = logging.getLogger(__name__)
 PLATFORMS = ["sensor"]
-SERVICES = ["add_code", "set_validity", "open_door", "update_code", "remove_code", "refresh", "list_codes", "list_log", "device_time", "sync_clock",
+SERVICES = ["add_code", "set_validity", "open_door", "reboot", "update_code", "remove_code", "refresh", "list_codes", "list_log", "device_time", "sync_clock",
             "block", "unblock", "retire", "restore", "forget", "rename_badge", "add_badge", "camera_probe"]
 
 # Eén gedeeld register voor ALLE config entries en voor de hele levensduur van Home Assistant:
@@ -848,6 +848,18 @@ def _register_services(hass: HomeAssistant):
         hass.bus.async_fire(f"{DOMAIN}_remote_open", {"door": c.door_name, "door_id": c.door_id, "user": user})
         return {"door": c.door_name, "opened": True}
 
+    async def reboot(call: ServiceCall):
+        coords = _all_coords(hass)
+        c = coords[_door_ids(coords, [call.data["door"]])[0]]
+        user = await mgr.user_name(call.context)
+        reg = _reg()
+        async with write_lock:      # niet midden in een codewijziging
+            await _exec(c, lambda client: client.reboot())
+        reg.log(user, "toestel herstart", {"kind": "deur", "name": c.door_name}, [c.door_name])
+        await reg.save()
+        _LOGGER.warning("Toestel %s herstart door %s", c.door_name, user)
+        return {"door": c.door_name, "reboot": True}
+
     async def set_validity(call: ServiceCall):
         vfrom, vuntil = _validity(call.data, allow_past_start=True)
         user = await mgr.user_name(call.context)
@@ -891,6 +903,8 @@ def _register_services(hass: HomeAssistant):
         user = await mgr.user_name(call.context)
         return await mgr.guarded(mgr.add_badge, name, call.data["card"].upper(), door_ids, user)
 
+    async_register_admin_service(hass, DOMAIN, "reboot", reboot, vol.Schema({vol.Required("door"): cv.string}),
+                                 supports_response=SupportsResponse.OPTIONAL)
     async_register_admin_service(hass, DOMAIN, "open_door", open_door, vol.Schema({vol.Required("door"): cv.string}),
                                  supports_response=SupportsResponse.OPTIONAL)
     async_register_admin_service(hass, DOMAIN, "set_validity", set_validity, vol.Schema({
