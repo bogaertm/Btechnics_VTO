@@ -17,7 +17,7 @@ from contextlib import closing
 from datetime import datetime, tzinfo
 
 from .const import ARCHIVE_KEEP_DAYS, LOG_LOST_POLLS, LOG_TAIL
-from .records import method_label, new_since, own_numbers, rec_key, rec_vto
+from .records import method_label, new_since, own_numbers, rec_key, rec_room, rec_vto
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS access (
@@ -99,6 +99,9 @@ class AccessArchive:
             # archief van v0.3.0 tot 0.3.4: kolom met het echte tijdstip toevoegen
             if "t" not in cols:
                 c.execute("ALTER TABLE access ADD COLUMN t INTEGER")
+            # archief tot 0.3.6: nummer van de binnenpost bij openen via de binnenpost
+            if "room" not in cols:
+                c.execute("ALTER TABLE access ADD COLUMN room TEXT NOT NULL DEFAULT ''")
 
     def _conn(self):
         c = sqlite3.connect(self._path, timeout=30)
@@ -155,8 +158,8 @@ class AccessArchive:
                 )
             if new:
                 c.executemany(
-                    "INSERT INTO access (door_id, door, ts, name, card, method, status, vto, t) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                    [(door_id, door_name, int(k[0]), k[2], k[1], k[3], k[4], rec_vto(r), to_utc(int(k[0])) if to_utc else None)
+                    "INSERT INTO access (door_id, door, ts, name, card, method, status, vto, t, room) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    [(door_id, door_name, int(k[0]), k[2], k[1], k[3], k[4], rec_vto(r), to_utc(int(k[0])) if to_utc else None, rec_room(r))
                      for r, k in ((r, rec_key(r)) for r in new)],
                 )
             if to_utc is not None and door_id not in self._timed:
@@ -165,6 +168,7 @@ class AccessArchive:
             # toestelnummers enkel bijwerken als er iets bijkwam (en een keer per deur na het opstarten)
             if new or door_id not in self._checked:
                 self._fill_legacy(c, door_id, recs)
+                self._fill_room(c, door_id, recs)
                 self._update_own(c)
                 if new is not None:
                     self._checked.add(door_id)
@@ -191,11 +195,24 @@ class AccessArchive:
         een verkeerd klokje mag niet bepalen wat de laatste toegang is), met het echte tijdstip."""
         with closing(self._conn()) as c:
             rows = c.execute(
-                f"SELECT door_id, door, {TS} ts, {NAME} name, card, method, status FROM access "
+                f"SELECT door_id, door, {TS} ts, {NAME} name, card, method, status, room FROM access "
                 f"WHERE door_id = ? AND {OWN} ORDER BY id DESC LIMIT ?",
                 (door_id, int(limit)),
             ).fetchall()
         return [dict(r) for r in rows]
+
+    def _fill_room(self, c, door_id, recs):
+        """Rijen van voor v0.3.7 hebben het nummer van de binnenpost nog niet: aanvullen uit de buffer."""
+        todo = [(rec_room(r), door_id, *rec_key(r)) for r in recs if rec_room(r)]
+        if not todo or c.execute(
+            "SELECT 1 FROM access WHERE door_id = ? AND method = '4' AND room = '' LIMIT 1", (door_id,)
+        ).fetchone() is None:
+            return
+        c.executemany(
+            "UPDATE access SET room = ? WHERE door_id = ? AND room = '' AND ts = ? AND card = ? AND name = ? "
+            "AND method = ? AND status = ?",
+            [(v, d, int(k0), k1, k2, k3, k4) for v, d, k0, k1, k2, k3, k4 in todo],
+        )
 
     def _fill_legacy(self, c, door_id, recs):
         """Rijen van voor v0.3.3 hebben nog geen toestelnummer: aanvullen uit de buffer van het toestel."""
@@ -294,7 +311,7 @@ class AccessArchive:
                 f"SELECT COUNT(*) n, SUM(status = '1') o FROM access {w}", args
             ).fetchone()
             rows = c.execute(
-                f"SELECT id, door_id, door, {TS} ts, {NAME} name, card, method, status FROM access {w} "
+                f"SELECT id, door_id, door, {TS} ts, {NAME} name, card, method, status, room FROM access {w} "
                 f"ORDER BY {TS} DESC, id DESC LIMIT ? OFFSET ?",
                 args + [limit, max(0, int(offset))],
             ).fetchall()
@@ -318,7 +335,7 @@ class AccessArchive:
             "rows": [
                 {
                     "id": r["id"], "door_id": r["door_id"], "door": r["door"], "ts": r["ts"],
-                    "name": r["name"] or "?", "card": r["card"], "method": method_label(r["method"]),
+                    "name": r["name"] or "?", "card": r["card"], "method": method_label(r["method"], r["room"]),
                     "opened": r["status"] == "1",
                 }
                 for r in rows
