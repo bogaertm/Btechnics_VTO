@@ -3,10 +3,11 @@
   "name": "Btechnics VTO",
   "after_dependencies": [
     "frontend",
+    "lovelace",
     "http",
     "websocket_api"
   ],
-  "version": "0.3.7",
+  "version": "0.3.8",
   "documentation": "https://github.com/bogaertm/Btechnics_VTO",
   "issue_tracker": "https://github.com/bogaertm/Btechnics_VTO/issues",
   "codeowners": [
