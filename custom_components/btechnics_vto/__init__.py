@@ -569,11 +569,16 @@ def _register_services(hass: HomeAssistant):
                 key = ((r.get("UserID") or "").strip(), r.get("CommonPassword"))
                 row = rows.setdefault(key, {"name": key[0], "code": key[1], "doors": {}, "managed": False, "id": None})
                 row["doors"][c.door_name] = r["RecNo"]
+        entries = []
         for cid, m in reg.managed.items():
-            row = rows.get((m["name"], m["code"]))
-            if row:
-                row["managed"], row["id"] = True, cid
-        out = {"codes": sorted(rows.values(), key=lambda x: x["name"].lower()), "registry": reg.export()}
+            if m.get("kind") == "code":
+                row = rows.get((m["name"], m["code"]))
+                if row:
+                    row["managed"], row["id"] = True, cid
+            entries.append({"id": cid, "kind": m.get("kind"), "name": m.get("name"), "status": m.get("status"),
+                            "until": m.get("until"), "doors": sorted(m.get("doors", {})), "stored": sorted(m.get("stored", {}))})
+        out = {"codes": sorted(rows.values(), key=lambda x: x["name"].lower()),
+               "beheer": sorted(entries, key=lambda x: (x["name"] or "").lower()), "registry": reg.export()}
         if call.data.get("raw"):
             # alle velden zoals het toestel ze bewaart (diagnose), per deur
             out["ruw"] = {c.door_name: {"codes": c.codes, "badges": c.cards} for c in coords.values()}

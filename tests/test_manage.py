@@ -282,3 +282,16 @@ async def test_code_van_geblokkeerde_persoon_niet_opnieuw_uitdelen(hass, devices
     await call(hass, "block", {"id": cid})
     with pytest.raises(HomeAssistantError, match="bewaard bij Adriaan"):
         await call(hass, "add_code", {"name": "Nieuw", "code": "936100", "doors": ["Cafe"]})
+
+
+async def test_list_codes_met_badges_en_geblokkeerde(hass, devices):
+    cafe, _ = devices
+    cafe.add_card_rec("Roijin", "AB12CD34")
+    await setup_two_entries(hass)
+    await hass.async_block_till_done()
+    cid, _ = entry(hass, "Adriaan")
+    await call(hass, "block", {"id": cid})
+    res = await call(hass, "list_codes", {"raw": True}, True)
+    beheer = {e["name"] + "/" + e["kind"]: e for e in res["beheer"]}
+    assert beheer["Roijin/badge"]["status"] == "active" and beheer["Adriaan/code"]["status"] == "blocked"
+    assert beheer["Adriaan/code"]["stored"] == ["cafe"]
