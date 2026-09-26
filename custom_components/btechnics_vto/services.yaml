@@ -50,6 +50,12 @@ refresh:
 list_codes:
   name: Codes opvragen
   description: Geeft alle codes per deur terug, met aanduiding welke via de integratie beheerd worden.
+  fields:
+    raw:
+      name: Ruwe velden
+      description: Voegt per deur alle velden van codes en badges toe zoals het toestel ze bewaart (voor diagnose)
+      example: false
+      selector: { boolean: {} }
 list_log:
   name: Logboek opvragen
   description: Geeft het toegangslogboek van alle deuren terug, rechtstreeks uit de toestellen.
