@@ -28,7 +28,7 @@ from .websocket import async_register as async_register_websocket
 _LOGGER = logging.getLogger(__name__)
 PLATFORMS = ["sensor"]
 SERVICES = ["add_code", "update_code", "remove_code", "refresh", "list_codes", "list_log", "device_time", "sync_clock",
-            "block", "unblock", "retire", "restore", "forget", "rename_badge", "add_badge"]
+            "block", "unblock", "retire", "restore", "forget", "rename_badge", "add_badge", "camera_probe"]
 
 # Eén gedeeld register voor ALLE config entries en voor de hele levensduur van Home Assistant:
 # meerdere instanties op hetzelfde opslagbestand zouden elkaars codes en doorloopunten overschrijven.
@@ -710,6 +710,18 @@ def _register_services(hass: HomeAssistant):
         vol.Required("card"): vol.All(cv.string, vol.Match(r"^[0-9A-Fa-f]{4,16}$", msg="badgenummer: 4 tot 16 tekens 0-9 en A-F")),
         vol.Required("doors"): vol.All(cv.ensure_list, [cv.string]),
     }), supports_response=SupportsResponse.OPTIONAL)
+
+    async def camera_probe(call: ServiceCall):
+        out = []
+        for c in sorted(_all_coords(hass).values(), key=lambda c: c.door_name.lower()):
+            try:
+                res = await hass.async_add_executor_job(c.client.camera_probe)
+            except Exception as e:  # noqa: BLE001  diagnose
+                res = {"fout": str(e)}
+            out.append({"deur": c.door_name, **res})
+        return {"toestellen": out}
+
+    async_register_admin_service(hass, DOMAIN, "camera_probe", camera_probe, supports_response=SupportsResponse.ONLY)
 
     ID_SCHEMA = vol.Schema({vol.Required("id"): cv.string})
     async_register_admin_service(hass, DOMAIN, "block", block, vol.Schema({

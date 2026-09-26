@@ -171,3 +171,6 @@ add_badge:
       required: true
       example: '["Cafe", "Kammerstraat"]'
       selector: { object: {} }
+camera_probe:
+  name: Camera testen
+  description: Diagnose. Kijkt per toestel of een foto nemen lukt en of toegangen meteen gemeld worden. Bewaart geen beelden.

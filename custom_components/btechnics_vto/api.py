@@ -42,6 +42,19 @@ class VTOError(Exception):
     pass
 
 
+def _jpeg_size(b: bytes):
+    """Breedte en hoogte uit een JPEG-kop (zonder beeldbibliotheek)."""
+    i = 2
+    while i + 9 < len(b):
+        if b[i] != 0xFF:
+            return None
+        marker, ln = b[i + 1], int.from_bytes(b[i + 2:i + 4], "big")
+        if marker in (0xC0, 0xC1, 0xC2):
+            return int.from_bytes(b[i + 7:i + 9], "big"), int.from_bytes(b[i + 5:i + 7], "big")
+        i += 2 + ln
+    return None
+
+
 class VTOClient:
     def __init__(self, host: str, https: bool, username: str, password: str):
         self.base = ("https://" if https else "http://") + host
@@ -79,6 +92,44 @@ class VTOClient:
         if obj is not None:
             body["object"] = obj
         return _post(self.base + "/RPC2", body)
+
+    # ---------- camera (HTTP met digest, zelfde gebruiker) ----------
+    def _opener(self):
+        mgr = urllib.request.HTTPPasswordMgrWithDefaultRealm()
+        mgr.add_password(None, self.base, self.user, self._pw)
+        return urllib.request.build_opener(urllib.request.HTTPSHandler(context=CTX),
+                                           urllib.request.HTTPDigestAuthHandler(mgr))
+
+    def snapshot(self, channel: int = 1, timeout: float = 6) -> bytes:
+        with self._opener().open(f"{self.base}/cgi-bin/snapshot.cgi?channel={channel}", timeout=timeout) as r:
+            data = r.read()
+        if not data.startswith(b"\xff\xd8"):
+            raise VTOError(f"geen JPEG van het toestel ({len(data)} bytes)")
+        return data
+
+    def camera_probe(self) -> dict:
+        """Diagnose: werkt een foto nemen en kan de integratie meteen horen wanneer iemand binnenkomt?"""
+        import time as _t
+        out = {}
+        for ch in (1, 0):
+            t0 = _t.monotonic()
+            try:
+                img = self.snapshot(ch)
+                out[f"foto_kanaal_{ch}"] = {"ok": True, "bytes": len(img), "grootte": _jpeg_size(img),
+                                            "ms": int((_t.monotonic() - t0) * 1000)}
+                break
+            except Exception as e:  # noqa: BLE001  diagnose
+                out[f"foto_kanaal_{ch}"] = {"ok": False, "fout": str(e)[:200]}
+        t0 = _t.monotonic()
+        try:
+            url = f"{self.base}/cgi-bin/eventManager.cgi?action=attach&codes=[AccessControl,DoorStatus]&heartbeat=2"
+            with self._opener().open(url, timeout=6) as r:
+                head = r.read1(600) if hasattr(r, "read1") else r.read(600)
+                out["gebeurtenissen"] = {"ok": True, "status": r.status, "type": r.headers.get("Content-Type"),
+                                         "begin": head.decode("latin-1")[:300], "ms": int((_t.monotonic() - t0) * 1000)}
+        except Exception as e:  # noqa: BLE001  diagnose
+            out["gebeurtenissen"] = {"ok": False, "fout": str(e)[:200]}
+        return out
 
     # ---------- lezen ----------
     def info(self):

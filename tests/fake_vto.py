@@ -170,6 +170,9 @@ class FakeClient:
             self.dev.offline_after_remove, self.dev.offline = False, True
             raise OSError("verbinding weg")
 
+    def camera_probe(self):
+        return {"foto_kanaal_1": {"ok": True, "bytes": 1234, "grootte": [1280, 720], "ms": 50}}
+
     def add_card(self, record):
         self._need()
         if self.dev.fail_add:

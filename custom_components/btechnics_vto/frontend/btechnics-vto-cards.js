@@ -583,6 +583,13 @@ class VtoCodes extends VtoBase {
       .audit td { font-size: 0.85rem; }
       td.when { white-space: nowrap; font-variant-numeric: tabular-nums; }
       td .pname { font-weight: 500; }
+      button.linkbtn { background: none; border: 0; padding: 0; font: inherit; color: var(--primary-text-color); cursor: pointer; text-align: left; }
+      button.linkbtn:hover, button.linkbtn:focus-visible { color: var(--primary-color); text-decoration: underline; }
+      .hist .kpis { display: flex; flex-wrap: wrap; gap: 16px; margin: 4px 0 10px; font-size: 0.9rem; }
+      .hist .kpis b { font-size: 1.1rem; font-weight: 500; font-variant-numeric: tabular-nums; }
+      .hist .head { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+      .hist td { font-size: 0.9rem; }
+      .more { display: flex; justify-content: center; padding: 12px 0 0; }
       @media (max-width: 640px) {
         table.list thead { display: none; }
         table.list, table.list tbody, table.list tr, table.list td { display: block; width: auto; }
@@ -603,6 +610,7 @@ class VtoCodes extends VtoBase {
       </div>
       <div class="tabs" id="tabs"></div>
       <div id="panel" class="panel"></div>
+      <div id="hist" class="panel hist"></div>
       <div id="msg" class="msg"></div>
       <div id="out" class="scroll"><div class="muted">Laden...</div></div>
       <div class="title" style="margin-top:20px;font-size:1.05rem">Wijzigingen</div>
@@ -619,6 +627,8 @@ class VtoCodes extends VtoBase {
     $("new").addEventListener("click", () => this._openForm("add", null));
     $("newbadge").addEventListener("click", () => this._openForm("addbadge", null));
     this.shadowRoot.addEventListener("click", (e) => {
+      const h = e.target.closest("[data-hist]");
+      if (h) return this._history(h.dataset.hist);
       const b = e.target.closest("[data-act]");
       if (!b) return;
       const entry = this._data && this._data.entries.find((x) => x.id === b.dataset.id);
@@ -647,6 +657,49 @@ class VtoCodes extends VtoBase {
       const msg = e && e.code === "unauthorized" ? "Enkel beheerders kunnen de codes bekijken." : `Kon de codes niet laden: ${esc(errText(e))}`;
       this.shadowRoot.getElementById("out").innerHTML = `<div class="error">${msg}</div>`;
     }
+  }
+  async _history(name, more) {
+    // toegangsgeschiedenis van een persoon (codes en badges), laatste jaar, uit het archief
+    const el = this.shadowRoot.getElementById("hist");
+    if (!name) return;
+    const f = this._fmt;
+    if (!more) {
+      this._hist = { name, res: null, seq: (this._hist ? this._hist.seq : 0) + 1 };
+      el.innerHTML = `<div class="head"><h3>Geschiedenis: ${esc(name)}</h3><button class="btn" id="hclose">Sluiten</button></div><div class="muted">Laden...</div>`;
+      el.classList.add("on");
+      el.querySelector("#hclose").addEventListener("click", () => this._closeHistory());
+      el.scrollIntoView({ block: "nearest" });
+    }
+    const h = this._hist, seq = h.seq;
+    try {
+      const msg = { type: "btechnics_vto/history", person: name, days: 365, limit: 25, offset: more ? h.res.rows.length : 0 };
+      if (more) msg.max_id = h.res.max_id;
+      const res = await this._ws(msg);
+      if (!this._hist || this._hist.seq !== seq) return; // intussen een andere persoon gekozen of gesloten
+      if (more) { h.res.rows = h.res.rows.concat(res.rows); } else { h.res = res; }
+      const r = h.res;
+      const last = r.rows[0];
+      el.innerHTML = `<div class="head"><h3>Geschiedenis: ${esc(name)}</h3><button class="btn" id="hclose">Sluiten</button></div>
+        <div class="kpis"><span><b>${r.total.toLocaleString("nl-BE")}</b> toegangen (laatste jaar)</span><span><b>${r.opened.toLocaleString("nl-BE")}</b> geopend</span>
+          <span><b>${r.refused.toLocaleString("nl-BE")}</b> geweigerd</span>${last ? `<span>Laatst: <b>${esc(f.dateTime.format(new Date(last.ts * 1000)))}</b></span>` : ""}</div>
+        ${r.rows.length ? `<div class="scroll"><table><thead><tr><th>Wanneer</th><th>Deur</th><th>Hoe</th><th>Status</th></tr></thead><tbody>
+          ${r.rows.map((x) => `<tr><td class="when">${esc(f.dateTime.format(new Date(x.ts * 1000)))}</td><td>${esc(x.door)}</td><td class="muted">${esc(x.method)}</td>
+            <td><span class="status"><span class="dot ${x.opened ? "open" : "refused"}"></span>${x.opened ? "Geopend" : "Geweigerd"}</span></td></tr>`).join("")}
+          </tbody></table></div>` : `<div class="empty">Geen toegangen in het laatste jaar.</div>`}
+        ${r.rows.length < r.total ? `<div class="more"><button class="btn" id="hmore">Meer tonen (${r.rows.length} van ${r.total.toLocaleString("nl-BE")})</button></div>` : ""}`;
+      el.querySelector("#hclose").addEventListener("click", () => this._closeHistory());
+      const hm = el.querySelector("#hmore");
+      if (hm) hm.addEventListener("click", () => { hm.disabled = true; this._history(name, true); });
+    } catch (e) {
+      if (!this._hist || this._hist.seq !== seq) return;
+      el.insertAdjacentHTML("beforeend", `<div class="error">Kon de geschiedenis niet laden: ${esc(errText(e))}</div>`);
+    }
+  }
+  _closeHistory() {
+    const el = this.shadowRoot.getElementById("hist");
+    this._hist = { seq: (this._hist ? this._hist.seq : 0) + 1 };
+    el.classList.remove("on");
+    el.innerHTML = "";
   }
   _message(text, ok) {
     const el = this.shadowRoot.getElementById("msg");
@@ -687,7 +740,7 @@ class VtoCodes extends VtoBase {
     } else {
       $("out").innerHTML = `<table class="list"><thead><tr><th>Persoon</th><th>Soort</th><th>Code of badge</th><th>Deuren</th><th>Status</th><th></th></tr></thead><tbody>
         ${list.map((e) => `<tr>
-          <td><span class="pname">${esc(e.name || "?")}</span></td>
+          <td><button class="pname linkbtn" data-hist="${esc(e.name || "")}" title="Toegangsgeschiedenis van ${esc(e.name || "?")}">${esc(e.name || "?")}</button></td>
           <td class="muted kind">${e.kind === "badge" ? "badge" : "code"}</td>
           <td>${sec(e)}</td>
           <td>${e.doors.map((d) => `<span class="chip">${esc(d.name)}</span>`).join("")}${e.stored.map((d) => `<span class="chip stored" title="bewaard, niet op het toestel">${esc(d.name)}</span>`).join("")}</td>

@@ -402,3 +402,13 @@ async def test_bewaarde_code_niet_naar_bestaande_code(hass, devices):
     with pytest.raises(HomeAssistantError, match="al"):
         await call(hass, "update_code", {"id": cid, "code": "555555"})
     assert reg(hass).managed[cid]["code"] == "936100"
+
+
+async def test_camera_probe_enkel_beheerders(hass, devices, hass_read_only_user):
+    from homeassistant.core import Context
+    await setup_two_entries(hass)
+    r = await call(hass, "camera_probe", {}, True)
+    assert [x["deur"] for x in r["toestellen"]] == ["Cafe", "Kammerstraat"] and r["toestellen"][0]["foto_kanaal_1"]["ok"]
+    with pytest.raises(Unauthorized):
+        await hass.services.async_call(DOMAIN, "camera_probe", {}, blocking=True, return_response=True,
+                                       context=Context(user_id=hass_read_only_user.id))
