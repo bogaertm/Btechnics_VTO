@@ -29,6 +29,10 @@ def async_register(hass: HomeAssistant):
     websocket_api.async_register_command(hass, ws_manage_action)
 
 
+def _no_card(r):
+    return {k: v for k, v in r.items() if k != "card"} if r else r
+
+
 def _day_start(hass, days_back: int = 0) -> int:
     """Middernacht (tijdzone van Home Assistant) van vandaag min days_back dagen; correct rond zomer/wintertijd."""
     return int(dt_util.start_of_local_day(dt_util.now().date() - timedelta(days=days_back)).timestamp())
@@ -54,8 +58,9 @@ async def ws_doors(hass, connection, msg):
             "id": did,
             "name": c.door_name,
             "available": bool(c.last_update_success),
-            "last_unlock": c.last_unlock,
-            "recent": c.recent[:10],
+            # zonder kaartnummers: dit commando is voor elke gebruiker
+            "last_unlock": _no_card(c.last_unlock),
+            "recent": [_no_card(r) for r in c.recent[:10]],
             "codes": len(c.codes),
             "cards": len(c.cards),
             "today": today.get(did, {"opened": 0, "refused": 0}),

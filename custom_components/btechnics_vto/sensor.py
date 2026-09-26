@@ -48,13 +48,15 @@ class LastUnlockSensor(_Base):
 
     @property
     def extra_state_attributes(self):
-        return {**(self.coordinator.last_unlock or {}), "recent": self.coordinator.recent}
+        # Zonder kaartnummers: attributen zijn leesbaar voor elke gebruiker, ook zonder beheerdersrechten.
+        u = {k: v for k, v in (self.coordinator.last_unlock or {}).items() if k != "card"}
+        return {**u, "recent": [{k: v for k, v in r.items() if k != "card"} for r in self.coordinator.recent]}
 
 
 class CountSensor(_Base):
     _attr_state_class = "measurement"
-    # Codes en kaartnummers staan in het attribuut "lijst" voor het dashboard, maar worden
-    # bewust NIET in de databank-historiek opgeslagen (toegangscodes horen daar niet thuis).
+    # Enkel de namen in het attribuut "lijst": codes en kaartnummers zijn voor beheerders
+    # (via de kaart of list_codes), attributen zijn leesbaar voor elke gebruiker.
     _unrecorded_attributes = frozenset({"lijst"})
 
     def __init__(self, coordinator, key, name, icon):
@@ -73,14 +75,8 @@ class CountSensor(_Base):
         # Volledige lijst als attribuut, zodat een dashboardkaart (markdown/template)
         # alle codes of kaarten van deze deur kan tonen zonder aparte service-aanroep.
         if self._key == "codes":
-            lijst = [
-                {"naam": (r.get("UserID") or "").strip() or "?", "code": r.get("CommonPassword", "")}
-                for r in self.coordinator.codes
-            ]
+            lijst = [{"naam": (r.get("UserID") or "").strip() or "?"} for r in self.coordinator.codes]
         else:
-            lijst = [
-                {"naam": r.get("CardName") or r.get("UserID") or "?", "kaart": r.get("CardNo", "")}
-                for r in self.coordinator.cards
-            ]
+            lijst = [{"naam": r.get("CardName") or r.get("UserID") or "?"} for r in self.coordinator.cards]
         lijst.sort(key=lambda x: str(x["naam"]).lower())
         return {"lijst": lijst}

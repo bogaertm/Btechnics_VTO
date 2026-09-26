@@ -359,3 +359,46 @@ async def test_onbekende_badges_uit_logboek(hass, devices, hass_ws_client):
     await c.send_json_auto_id({"type": f"{DOMAIN}/manage/list"})
     r = (await c.receive_json())["result"]
     assert r["unknown_cards"] == [] and any(e["name"] == "Nieuw" and e["kind"] == "badge" for e in r["entries"])
+
+
+async def test_geen_geheimen_voor_gewone_gebruikers(hass, devices, hass_ws_client, hass_read_only_access_token):
+    """Attributen en het deurenoverzicht zijn voor iedereen: nooit codes of badgenummers."""
+    from datetime import datetime, timezone
+    cafe, _ = devices
+    cafe.add_card_rec("Roijin", "AB12CD34")
+    cafe.add_log(int(datetime(2026, 9, 25, 12, 0, tzinfo=timezone.utc).timestamp()), name="Roijin", method=1, card="AB12CD34")
+    await setup_two_entries(hass)
+    await hass.async_block_till_done()
+    for eid in ("sensor.vto_cafe_codes", "sensor.vto_cafe_badges", "sensor.vto_cafe_laatste_unlock"):
+        st = hass.states.get(eid)
+        if st is not None:
+            txt = str(st.attributes)
+            assert "936100" not in txt and "AB12CD34" not in txt, eid
+    ro = await hass_ws_client(hass, hass_read_only_access_token)
+    await ro.send_json_auto_id({"type": f"{DOMAIN}/doors"})
+    r = await ro.receive_json()
+    assert r["success"] and "AB12CD34" not in str(r["result"]) and "936100" not in str(r["result"])
+    assert r["result"]["doors"][0]["last_unlock"]["name"] == "Roijin"
+
+
+async def test_leesfout_toestel_geen_lege_tabel(hass, devices):
+    """Een halve uitlezing mag nooit doorgaan voor een lege tabel (anders verdwijnen ingangen)."""
+    from custom_components.btechnics_vto.api import VTOClient, VTOError
+    c = VTOClient.__new__(VTOClient)
+    answers = {"RecordFinder.factory.create": {"result": 7}, "RecordFinder.startFind": {"result": True},
+               "RecordFinder.doFind": {"result": False, "error": {"code": 268632080}}, "RecordFinder.destroy": {"result": True}}
+    c.call = lambda m, p=None, o=None: answers[m]
+    with pytest.raises(VTOError):
+        c.find("AccessControlCommonPassword")
+
+
+async def test_bewaarde_code_niet_naar_bestaande_code(hass, devices):
+    cafe, _ = devices
+    cafe.add_code_rec("Bert", "555555")
+    await setup_two_entries(hass)
+    await hass.async_block_till_done()
+    cid, _ = entry(hass, "Adriaan")
+    await call(hass, "block", {"id": cid})
+    with pytest.raises(HomeAssistantError, match="al"):
+        await call(hass, "update_code", {"id": cid, "code": "555555"})
+    assert reg(hass).managed[cid]["code"] == "936100"

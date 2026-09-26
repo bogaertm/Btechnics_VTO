@@ -82,9 +82,9 @@ class VTOClient:
 
     # ---------- lezen ----------
     def info(self):
-        t = self.call("magicBox.getDeviceType").get("params", {}).get("type")
-        v = self.call("magicBox.getSoftwareVersion").get("params", {}).get("version", {})
-        s = self.call("magicBox.getSerialNo").get("params", {}).get("sn")
+        t = (self.call("magicBox.getDeviceType").get("params") or {}).get("type")
+        v = (self.call("magicBox.getSoftwareVersion").get("params") or {}).get("version", {})
+        s = (self.call("magicBox.getSerialNo").get("params") or {}).get("sn")
         return {"type": t, "version": v.get("Version") if isinstance(v, dict) else v, "serial": s}
 
     def find(self, table, count=1000):
@@ -97,6 +97,8 @@ class VTOClient:
             recs = []
             while True:
                 f = self.call("RecordFinder.doFind", {"count": 100}, obj)
+                if not f.get("result"):
+                    raise VTOError(f"{table} kan niet volledig gelezen worden: {f.get('error')}")
                 batch = (f.get("params") or {}).get("records") or []
                 recs += batch
                 if len(batch) < 100 or len(recs) >= count:

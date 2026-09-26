@@ -282,7 +282,7 @@ class Manager:
             raise HomeAssistantError(msg)
         return {"id": cid, "status": m["status"]}
 
-    async def unblock(self, cid: str, user: str, action: str = "gedeblokkeerd"):
+    async def unblock(self, cid: str, user: str, action: str = "gedeblokkeerd", quiet: bool = False):
         """Alle bewaarde records terug op de toestellen zetten."""
         m = self.entry(cid)
         if not m["stored"]:
@@ -320,7 +320,10 @@ class Manager:
         await self._refresh(done)
         if errors:
             msg = f"'{name}' {action}, maar niet overal: {'; '.join(errors)}."
-            self.notify(msg, cid)
+            if quiet:
+                _LOGGER.debug(msg)
+            else:
+                self.notify(msg, cid)
             raise HomeAssistantError(msg)
         return {"id": cid, "status": m["status"]}
 
@@ -335,6 +338,14 @@ class Manager:
         if code:
             if m["kind"] != "code":
                 raise HomeAssistantError("het nummer van een badge kan niet aangepast worden")
+            if code != m["code"]:
+                for oid, o in self.reg.managed.items():
+                    if oid != cid and o.get("kind") == "code" and o.get("code") == code:
+                        raise HomeAssistantError(f"code is al van {o.get('name') or '?'}")
+                for c in self._coords().values():
+                    for r in c.codes:
+                        if r.get("CommonPassword") == code:
+                            raise HomeAssistantError(f"code staat al op {c.door_name} bij {(r.get('UserID') or '').strip() or '?'}")
             m["code"] = code
         for rec in m["stored"].values():
             if m["kind"] == "code":
@@ -424,7 +435,7 @@ class Manager:
             msg = f"badge '{name}' niet toegevoegd: {err}"
             if left:
                 msg += f". Kijk na op {', '.join(left)}: de badge kan daar toch staan (verschijnt dan vanzelf in de lijst)."
-                self.notify(msg, f"badge_{card}")
+                self.notify(msg, "badge_nieuw")
             raise HomeAssistantError(msg) from err
         finally:
             await self._refresh(door_ids)
@@ -461,11 +472,15 @@ class Manager:
             until = dt_util.parse_datetime(m["until"]) if m.get("status") == "blocked" and m.get("until") else None
             if until is None or until > now:
                 continue
+            first = cid not in self._warned
             try:
-                await self.guarded(self.unblock, cid, "planner", "automatisch gedeblokkeerd")
+                # eerste poging met melding; daarna stil elke minuut opnieuw, tot het lukt
+                await self.guarded(self.unblock, cid, "planner", "automatisch gedeblokkeerd", not first)
+                if not first:
+                    self.notify(f"'{m.get('name')}' is alsnog automatisch gedeblokkeerd.", cid)
                 self._warned.discard(cid)
             except HomeAssistantError as e:
-                if cid not in self._warned:
+                if first:
                     self._warned.add(cid)
                     _LOGGER.error("Automatisch deblokkeren van %s mislukt, nieuwe poging elke minuut: %s", m.get("name"), e)
 

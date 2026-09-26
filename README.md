@@ -29,7 +29,7 @@ type: custom:btechnics-vto-toegang       # toegangshistoriek, optie period: 1, 7
 type: custom:btechnics-vto-codes         # codes en badges per persoon
 ```
 
-De toegangshistoriek en de codes zijn enkel zichtbaar voor beheerders.
+De toegangshistoriek en de codes zijn enkel zichtbaar voor beheerders. Sensoren en het deurenoverzicht tonen namen, nooit codes of badgenummers.
 
 ## Beheer van codes en badges
 

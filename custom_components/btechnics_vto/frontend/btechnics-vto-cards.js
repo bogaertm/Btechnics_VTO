@@ -12,6 +12,12 @@ const MONTHS = ["jan", "feb", "mrt", "apr", "mei", "jun", "jul", "aug", "sep", "
 const esc = (s) =>
   String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
 
+function errText(e) {
+  if (e && typeof e === "object" && e.message) return e.message;
+  if (typeof e === "number" || !e) return "geen verbinding met Home Assistant";
+  return String(e);
+}
+
 function formatters(tz) {
   const o = { timeZone: tz || undefined };
   return {
@@ -135,7 +141,7 @@ class VtoOverzicht extends VtoBase {
       this._sig = this._data.doors.map((d) => { const s = this._hass.states[d.entities.last_unlock]; return s ? s.last_updated : ""; }).join("|");
       this._render();
     } catch (e) {
-      this.shadowRoot.getElementById("body").innerHTML = `<div class="error">Kon de deuren niet laden: ${esc(e.message || e)}</div>`;
+      this.shadowRoot.getElementById("body").innerHTML = `<div class="error">Kon de deuren niet laden: ${esc(errText(e))}</div>`;
     }
   }
   _render() {
@@ -179,7 +185,7 @@ class VtoOverzicht extends VtoBase {
         <div class="stat"><div class="v">${d.codes}</div><div class="l">Codes</div></div>
         <div class="stat"><div class="v">${d.cards}</div><div class="l">Badges</div></div>
       </div>
-      ${recent ? `<table class="recent">${recent}</table>` : '<div class="empty">Geen recente toegangen</div>'}
+      ${recent ? `<div class="scroll"><table class="recent">${recent}</table></div>` : '<div class="empty">Geen recente toegangen</div>'}
     </div>`;
   }
   static getStubConfig() {
@@ -195,6 +201,10 @@ const PERIODS = [
 const PAGE = 50;
 
 class VtoToegang extends VtoBase {
+  disconnectedCallback() {
+    clearTimeout(this._deb);
+    clearTimeout(this._retry);
+  }
   _init() {
     const c = this._config;
     this._state = {
@@ -338,6 +348,8 @@ class VtoToegang extends VtoBase {
     this._state.offset = 0;
     const seq = (this._seq = (this._seq || 0) + 1);
     clearTimeout(this._retry);
+    const mb = this.shadowRoot.getElementById("morebtn");
+    if (mb) mb.disabled = true;
     try {
       const res = await this._ws({ type: "btechnics_vto/history", ...this._filters(), limit: PAGE, offset: 0 });
       if (seq !== this._seq) return; // er kwam intussen een nieuwere zoekopdracht
@@ -353,25 +365,26 @@ class VtoToegang extends VtoBase {
         this.shadowRoot.getElementById("out").innerHTML = `<div class="error">Enkel beheerders kunnen de toegangshistoriek bekijken.</div>`;
         return;
       }
-      this.shadowRoot.getElementById("out").innerHTML = `<div class="error">Kon de historiek niet laden: ${esc(e.message || e)}. Nieuwe poging binnen 10 seconden.</div>`;
-      this._retry = setTimeout(() => this.isConnected && this._reload(), 10000);
+      const permanent = e && typeof e === "object" && e.code && !["not_ready", "unknown_error", "timeout"].includes(e.code);
+      this.shadowRoot.getElementById("out").innerHTML = `<div class="error">Kon de historiek niet laden: ${esc(errText(e))}.${permanent ? "" : " Nieuwe poging binnen 10 seconden."}</div>`;
+      if (!permanent) this._retry = setTimeout(() => this.isConnected && this._reload(), 10000);
     }
   }
   async _loadMore() {
     if (this._busy || !this._res) return;
     this._busy = true;
-    const seq = this._seq;
+    const seq = this._seq, res0 = this._res;
     const btn = this.shadowRoot.getElementById("morebtn");
     if (btn) btn.disabled = true;
     try {
       // zelfde momentopname (max_id): geen dubbele of verschoven rijen als er intussen toegangen bijkomen
-      const res = await this._ws({ type: "btechnics_vto/history", ...this._filters(), limit: PAGE, offset: this._res.rows.length, max_id: this._res.max_id });
-      if (seq !== this._seq) return; // filters gewijzigd terwijl we laadden
+      const res = await this._ws({ type: "btechnics_vto/history", ...this._filters(), limit: PAGE, offset: res0.rows.length, max_id: res0.max_id });
+      if (seq !== this._seq || res0 !== this._res) return; // filters gewijzigd terwijl we laadden
       this._res.rows = this._res.rows.concat(res.rows);
       this._renderOut();
     } catch (e) {
       if (btn) btn.disabled = false;
-      this.shadowRoot.getElementById("more").insertAdjacentHTML("beforeend", `<div class="error">Laden mislukt: ${esc(e.message || e)}</div>`);
+      this.shadowRoot.getElementById("more").insertAdjacentHTML("beforeend", `<div class="error">Laden mislukt: ${esc(errText(e))}</div>`);
     } finally {
       this._busy = false;
     }
@@ -415,7 +428,7 @@ class VtoToegang extends VtoBase {
     const yv = (v) => top + plotH - (v / nice) * plotH;
     const band = plotW / all.length;
     const bw = Math.min(24, band * 0.6);
-    const grid = [0, nice / 2, nice].map((v) => `<line class="grid" x1="${left}" x2="${W - right}" y1="${yv(v)}" y2="${yv(v)}"></line>
+    const grid = (nice < 2 ? [0, nice] : [0, nice / 2, nice]).map((v) => `<line class="grid" x1="${left}" x2="${W - right}" y1="${yv(v)}" y2="${yv(v)}"></line>
       <text x="${left - 6}" y="${yv(v) + 4}" text-anchor="end">${Math.round(v).toLocaleString("nl-BE")}</text>`).join("");
     const bars = all.map((x, i) => {
       const cx = left + band * i + band / 2, x0 = cx - bw / 2;
@@ -493,15 +506,17 @@ class VtoToegang extends VtoBase {
     } catch (e) {
       this.shadowRoot.getElementById("info").innerHTML = `<span class="error">CSV export mislukt: ${esc(e.message || e)}</span>`;
     } finally {
-      btn.disabled = false;
+      if (btn) btn.disabled = false;
+      this._busy = false;
     }
   }
   async _csvExport() {
-    // in blokken ophalen (geen bovengrens), allemaal uit dezelfde momentopname
+    // in blokken ophalen (geen bovengrens), allemaal uit dezelfde momentopname en dezelfde filters
     const CHUNK = 20000;
+    const filt = this._filters();
     let rows = [], maxId;
     for (;;) {
-      const res = await this._ws({ type: "btechnics_vto/history", ...this._filters(), limit: CHUNK, offset: rows.length, ...(maxId ? { max_id: maxId } : {}) });
+      const res = await this._ws({ type: "btechnics_vto/history", ...filt, limit: CHUNK, offset: rows.length, ...(maxId ? { max_id: maxId } : {}) });
       maxId = res.max_id;
       rows = rows.concat(res.rows);
       if (res.rows.length < CHUNK || rows.length >= res.total) break;
@@ -517,7 +532,8 @@ class VtoToegang extends VtoBase {
     const blob = new Blob([String.fromCharCode(0xfeff) + lines.join("\r\n")], { type: "text/csv;charset=utf-8" });
     const a = document.createElement("a");
     a.href = URL.createObjectURL(blob);
-    a.download = `toegangen-${new Date().toISOString().slice(0, 10)}.csv`;
+    const dn = new Date(); const pad = (n) => String(n).padStart(2, "0");
+    a.download = `toegangen-${dn.getFullYear()}-${pad(dn.getMonth() + 1)}-${pad(dn.getDate())}.csv`;
     document.body.appendChild(a);
     a.click();
     a.remove();
@@ -616,7 +632,7 @@ class VtoCodes extends VtoBase {
     this._timer = null;
   }
   connectedCallback() {
-    if (this._hass && this._data && !this._timer) {
+    if (this._hass && !this._timer) {
       this._load();
       this._timer = setInterval(() => this._load(), 30000);
     }
@@ -628,7 +644,7 @@ class VtoCodes extends VtoBase {
       this._data = await this._ws({ type: "btechnics_vto/manage/list" });
       this._render();
     } catch (e) {
-      const msg = e && e.code === "unauthorized" ? "Enkel beheerders kunnen de codes bekijken." : `Kon de codes niet laden: ${esc(e.message || e)}`;
+      const msg = e && e.code === "unauthorized" ? "Enkel beheerders kunnen de codes bekijken." : `Kon de codes niet laden: ${esc(errText(e))}`;
       this.shadowRoot.getElementById("out").innerHTML = `<div class="error">${msg}</div>`;
     }
   }
@@ -699,6 +715,7 @@ class VtoCodes extends VtoBase {
     return this._run({ action: act, entry: e.id }, act === "unblock" ? "Gedeblokkeerd" : "Hersteld");
   }
   _openForm(type, e, act, text) {
+    if (!this._data) return this._message("De codes zijn nog niet geladen.");
     const p = this.shadowRoot.getElementById("panel");
     const doors = this._data.doors;
     this._message("");
@@ -708,9 +725,11 @@ class VtoCodes extends VtoBase {
         <div class="row"><button class="btn danger" id="ok">Bevestigen</button><button class="btn" id="cancel">Annuleren</button></div>`;
       p.querySelector("#ok").addEventListener("click", () => this._run({ action: act, entry: e.id }, act === "retire" ? "Uit dienst gehaald" : "Definitief verwijderd"));
     } else if (type === "block") {
-      const d = new Date(Date.now() + 86400000);
-      const pad = (n) => String(n).padStart(2, "0");
-      const def = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+      // standaard morgen om dit uur, in de tijdzone van Home Assistant (niet die van de browser)
+      const parts = Object.fromEntries(new Intl.DateTimeFormat("en-CA", { timeZone: (this._hass.config || {}).time_zone || undefined,
+        year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hourCycle: "h23" })
+        .formatToParts(new Date(Date.now() + 86400000)).filter((p) => p.type !== "literal").map((p) => [p.type, p.value]));
+      const def = `${parts.year}-${parts.month}-${parts.day}T${parts.hour}:${parts.minute}`;
       p.innerHTML = `<h3>${e.status === "blocked" ? "Blokkering aanpassen" : "Blokkeren"}: ${esc(e.name)}</h3>
         <div class="row"><label><input type="radio" name="bm" value="until" checked> Tot</label><input id="until" type="datetime-local" value="${def}"></div>
         <div class="row"><label><input type="radio" name="bm" value="manual"> Tot ik deblokkeer</label></div>
@@ -720,9 +739,8 @@ class VtoCodes extends VtoBase {
         const manual = p.querySelector("input[name=bm]:checked").value === "manual";
         const until = p.querySelector("#until").value;
         if (!manual && !until) return this._message("Kies een datum en uur.");
-        const when = new Date(until);
-        if (!manual && !(when > new Date())) return this._message("Het einde moet in de toekomst liggen.");
-        this._run({ action: "block", entry: e.id, ...(manual ? {} : { until: when.toISOString() }) }, "Geblokkeerd");
+        // zonder tijdzone doorgeven: Home Assistant leest dit in zijn eigen tijdzone (die van de kaart), niet die van de browser
+        this._run({ action: "block", entry: e.id, ...(manual ? {} : { until: until.length === 16 ? until + ":00" : until }) }, "Geblokkeerd");
       });
     } else if (type === "addbadge") {
       const unknown = (this._data.unknown_cards || []);
@@ -799,7 +817,7 @@ class VtoCodes extends VtoBase {
       this._closeForm();
       this._message(okText, true);
     } catch (e) {
-      this._message(`Niet gelukt: ${e.message || e}`);
+      this._message(`Niet gelukt: ${errText(e)}`);
     } finally {
       this._busy = false;
       await this._load();

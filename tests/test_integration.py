@@ -433,7 +433,8 @@ async def test_attributen_niet_in_databank(hass, devices):
     assert {"recent", "card"} <= LastUnlockSensor._unrecorded_attributes
     await setup_two_entries(hass)
     st = hass.states.get("sensor.vto_cafe_codes")
-    assert st.attributes["lijst"] == [{"naam": "Adriaan", "code": "936100"}]
+    assert st.attributes["lijst"] == [{"naam": "Adriaan"}]                  # geen codes in attributen (voor iedereen leesbaar)
+    assert "936100" not in str(hass.states.get("sensor.vto_cafe_codes").attributes)
 
 
 async def test_unload_ruimt_services_op(hass, devices):

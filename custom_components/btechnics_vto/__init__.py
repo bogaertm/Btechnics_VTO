@@ -294,7 +294,8 @@ def _register_services(hass: HomeAssistant):
         _LOGGER.error(message)
         if hass.services.has_service("persistent_notification", "create"):
             hass.async_create_task(hass.services.async_call(
-                "persistent_notification", "create", {"title": "Btechnics VTO: nakijken", "message": message}
+                "persistent_notification", "create",
+                {"title": "Btechnics VTO: nakijken", "message": message, "notification_id": "btechnics_vto_add_code"}
             ))
 
     mgr = Manager(hass, hass.data[REG_KEY], write_lock, lambda: _all_coords(hass))
@@ -355,6 +356,8 @@ def _register_services(hass: HomeAssistant):
                         unknown.append(coords[d].door_name)
                     continue
                 recno = _locate(codes, name, code)
+                if recno is None and d in doors and _matches(_find(codes, doors[d]), name, code):
+                    recno = doors[d]     # meerdere gelijke records: de onze is die met het gekende RecNo
                 if recno is None:
                     continue
                 try:
@@ -568,7 +571,7 @@ def _register_services(hass: HomeAssistant):
             for r in c.codes:
                 key = ((r.get("UserID") or "").strip(), r.get("CommonPassword"))
                 row = rows.setdefault(key, {"name": key[0], "code": key[1], "doors": {}, "managed": False, "id": None})
-                row["doors"][c.door_name] = r["RecNo"]
+                row["doors"][c.door_name] = r.get("RecNo")
         entries = []
         for cid, m in reg.managed.items():
             if m.get("kind") == "code":
@@ -652,7 +655,7 @@ def _register_services(hass: HomeAssistant):
         vol.Required("id"): cv.string, vol.Optional("name"): cv.string, vol.Optional("code"): CODE_SCHEMA,
         vol.Optional("doors"): vol.All(cv.ensure_list, [cv.string])}), supports_response=SupportsResponse.OPTIONAL)
     async_register_admin_service(hass, DOMAIN, "remove_code", remove_code, vol.Schema({vol.Required("id"): cv.string}))
-    hass.services.async_register(DOMAIN, "refresh", refresh)
+    async_register_admin_service(hass, DOMAIN, "refresh", refresh)
 
     def _until(value):
         if value is None:

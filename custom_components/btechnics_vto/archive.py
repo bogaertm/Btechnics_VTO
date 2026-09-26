@@ -270,7 +270,8 @@ class AccessArchive:
     def prune(self, now: float | None = None) -> int:
         cutoff = int((now or time.time()) - ARCHIVE_KEEP_DAYS * 86400)
         with self._lock, closing(self._conn()) as c, c:
-            return c.execute(f"DELETE FROM access WHERE {TS} < ?", (cutoff,)).rowcount
+            # enkel rijen met een echt tijdstip: een rij zonder t (klok nog niet gelezen) wacht
+            return c.execute("DELETE FROM access WHERE t IS NOT NULL AND t < ?", (cutoff,)).rowcount
 
     # ---------------------------------------------------------------- lezen
 

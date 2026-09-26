@@ -49,7 +49,7 @@ refresh:
   description: Leest codes, badges en logboek opnieuw uit op alle deuren.
 list_codes:
   name: Codes opvragen
-  description: Geeft alle codes per deur terug, met aanduiding welke via de integratie beheerd worden.
+  description: Geeft alle codes per deur terug, plus per persoon of badge de beheerstatus (veld beheer).
   fields:
     raw:
       name: Ruwe velden
