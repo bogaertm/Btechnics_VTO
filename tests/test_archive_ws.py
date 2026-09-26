@@ -590,3 +590,18 @@ def test_who_labels():
     assert who("", 0, True) == "Onbekende code"
     assert who("", 2, False) == "Onbekende badge"
     assert who("", 20, False) == "Ongeldige invoer"
+
+
+async def test_opening_op_afstand_toont_wie(hass, devices, hass_ws_client):
+    """Het toestel bewaart een opening op afstand als binnenpost met RoomNumber HA (vastgesteld 26/09/2026)."""
+    from homeassistant.util import dt as dt_util
+    cafe, _ = devices
+    await setup_two_entries(hass)
+    await hass.services.async_call(DOMAIN, "open_door", {"door": "Cafe"}, blocking=True, return_response=True)
+    cafe.add_log(int(dt_util.utcnow().timestamp()) + 3, name="", method=4, status=1)
+    cafe.log[-1]["RoomNumber"] = "HA"
+    await poll(hass, "cafe")
+    c = await hass_ws_client(hass)
+    r = await hist(c, door_ids=["cafe"])
+    row = next(x for x in r["rows"] if x["name"] == "Op afstand")
+    assert row["method"].startswith("op afstand door ")

@@ -136,8 +136,29 @@ async def ws_history(hass, connection, msg):
         return r
 
     res = await hass.async_add_executor_job(_q)
+    _remote_users(hass, res["rows"])
     res["query_ms"] = int((time.monotonic() - t0) * 1000)
     connection.send_result(msg["id"], res)
+
+
+def _remote_users(hass, rows):
+    """Bij een opening op afstand de gebruiker uit Wijzigingen tonen (zelfde deur, binnen 2 minuten)."""
+    from homeassistant.util import dt as dt_util
+    from .manage import MANAGER_KEY
+    mgr = hass.data.get(MANAGER_KEY)
+    if mgr is None:
+        return
+    opens = []
+    for a in mgr.reg.audit:
+        if a.get("action") == "deur geopend op afstand":
+            t = dt_util.parse_datetime(a.get("ts") or "")
+            if t is not None:
+                opens.append((t.timestamp(), a.get("name"), a.get("user")))
+    for r in rows:
+        if r.get("name") == "Op afstand":
+            hits = sorted((abs(t - r["ts"]), user) for t, door, user in opens if door == r.get("door") and abs(t - r["ts"]) <= 120)
+            if hits:
+                r["method"] = f"op afstand door {hits[0][1]}"
 
 
 @websocket_api.require_admin

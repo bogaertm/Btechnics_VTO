@@ -5,7 +5,7 @@ RecNo is positioneel en dus geen identiteit: records worden herkend op inhoud en
 """
 from datetime import datetime, timezone
 
-from .const import METHOD_INDOOR, METHODS
+from .const import METHOD_INDOOR, METHODS, REMOTE_SHORT_NUMBER
 
 
 def rec_time(r: dict) -> int:
@@ -111,6 +111,8 @@ def who(name, method, opened: bool, room: str = "") -> str:
         m = int(method)
     except (TypeError, ValueError):
         m = None
+    if m == METHOD_INDOOR and room == REMOTE_SHORT_NUMBER:
+        return "Op afstand"
     if m == METHOD_INDOOR:
         return f"Binnenpost {room}".strip()
     if m == 5:
@@ -127,6 +129,8 @@ def who(name, method, opened: bool, room: str = "") -> str:
 def method_label(m, room: str = "") -> str:
     try:
         label = METHODS.get(int(m), f"onbekend ({m})")
+        if int(m) == METHOD_INDOOR and room == REMOTE_SHORT_NUMBER:
+            return "op afstand"
         if int(m) == METHOD_INDOOR and room:
             label = f"{label} {room}"
         return label

@@ -12,7 +12,7 @@ const MONTHS = ["jan", "feb", "mrt", "apr", "mei", "jun", "jul", "aug", "sep", "
 const esc = (s) =>
   String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
 // Label voor een toegang zonder naam (door de integratie gezet volgens de methode), geen persoon.
-const LABEL_RE = /^(Binnenpost( \d+)?|Exitknop|Ongeldige invoer|Onbekende badge|Foute code|Onbekende code)$/;
+const LABEL_RE = /^(Binnenpost( \w+)?|Op afstand|Exitknop|Ongeldige invoer|Onbekende badge|Foute code|Onbekende code)$/;
 const isLabel = (n) => LABEL_RE.test(String(n || ""));
 
 function errText(e) {
@@ -1166,6 +1166,7 @@ const VTO_HELP = [
     <p><b>Namen zonder persoon.</b> Een rij zonder naam krijgt een label volgens de manier van openen:</p>
     ${htbl(["Label", "Betekenis"], [
       ["Binnenpost 9901, 9902, 9903", "Geopend via die binnenpost"],
+      ["Op afstand", "Geopend met de knop Deur openen; bij Hoe staat wie het deed"],
       ["Foute code", "Iemand typte een code die niet bestaat of niet geldig is voor die deur"],
       ["Onbekende badge", "Een badge die niet gekend is (zie Nieuwe badge)"],
       ["Ongeldige invoer", "Onvolledige invoer op het klavier"],
@@ -1251,7 +1252,7 @@ class VtoHandleiding extends VtoBase {
 // exist"). Daarom registreren we opnieuw zolang het nodig is, telkens via window.customElements
 // (het register dat NU actief is) en met een nieuwe subklasse (een constructor mag maar een keer).
 const CARD_CLASSES = [["btechnics-vto-overzicht", VtoOverzicht], ["btechnics-vto-toegang", VtoToegang], ["btechnics-vto-codes", VtoCodes], ["btechnics-vto-handleiding", VtoHandleiding]];
-const CARDS_VERSION = "0.7.1";
+const CARDS_VERSION = "0.7.2";
 const define = (name, cls) => {
   if (window.customElements.get(name)) return;
   try {

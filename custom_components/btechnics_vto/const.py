@@ -40,3 +40,6 @@ METHODS = {
     6: "vingerafdruk", 15: "gezicht", 20: "ongeldige invoer klavier",
 }
 METHOD_INDOOR = 4
+# Deur op afstand geopend door Home Assistant: het toestel bewaart dat als methode binnenpost met het
+# ShortNumber dat meegestuurd werd als RoomNumber (vastgesteld 26/09/2026 op Cafe: "binnenpost HA").
+REMOTE_SHORT_NUMBER = "HA"
