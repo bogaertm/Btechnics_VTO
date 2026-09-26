@@ -1236,133 +1236,135 @@ class VtoCodes extends VtoBase {
 }
 
 
-/* ------------------------------------------------------------------ handleiding */
-const htbl = (head, rows) => `<div class="scroll"><table><thead><tr>${head.map((h) => `<th>${h}</th>`).join("")}</tr></thead><tbody>
-  ${rows.map((r) => `<tr>${r.map((c) => `<td>${c}</td>`).join("")}</tr>`).join("")}</tbody></table></div>`;
-const VTO_HELP = [
-  ["start", "Waar en voor wie", `
-    <p>Toegangscontrole beheert de twee buitenposten van Trefpunt: Cafe en Kammerstraat. Je ziet wie wanneer binnenkwam en je beheert
-    alle codes en badges vanuit Home Assistant. De toestellen zelf hoef je niet meer te openen.</p>
-    ${htbl(["Pagina", "Waarvoor", "Wie"], [
-      ["Overzicht", "Status van elke deur, laatste toegang met foto, aantallen van vandaag, deur openen op afstand", "iedereen (openen: beheerders)"],
-      ["Historiek", "Alle toegangen van het laatste jaar, zoeken, per persoon, CSV", "enkel beheerders"],
-      ["Codes en badges", "Codes en badges toevoegen, delen, blokkeren, uit dienst halen", "enkel beheerders"],
-      ["Handleiding", "Deze uitleg", "iedereen"]])}
-    <p>Datums staan overal als Za 13 sep 2026, uren als 23u14.</p>`],
-  ["deur", "De deur openen", `
-    ${htbl(["Manier", "Hoe", "In de historiek"], [
-      ["Code", "Typ op het klavier <b># code #</b> (hekje, de code, hekje)", "naam van de persoon, methode code"],
-      ["Badge", "Hou de badge tegen de lezer", "naam van de persoon, methode badge"],
-      ["Binnenpost", "Iemand binnen drukt op de opentoets van de binnenpost", "Binnenpost 9901, 9902 of 9903"],
-      ["Op afstand", "Beheerder klikt op Deur openen op de pagina Overzicht", "bij Wijzigingen: wie, wanneer, welke deur"]])}
-    <p>Een code werkt op de deuren die bij die code aangevinkt zijn. Een geweigerde poging staat in de historiek als Foute code,
-    Onbekende badge of Ongeldige invoer.</p>`],
-  ["overzicht", "Overzicht", `
-    <p>Per deur een kaart met Online of Offline, de laatste toegang (wie, wanneer, geopend of geweigerd) en het aantal codes en badges
-    op dat toestel. Is er een foto van de laatste toegang, dan staat er een miniatuur; klik erop voor het grote beeld.</p>
-    <p>Daaronder de aantallen van vandaag (geopend en geweigerd) en de recentste toegangen van die deur.</p>
-    <p><b>Deur openen op afstand</b> (enkel beheerders)</p>
-    <ol>
-      <li>Klik op Deur openen bij de juiste deur.</li>
-      <li>De knop wordt rood: Zeker ... openen? Klik binnen 6 seconden nog eens. Anders gebeurt er niets.</li>
-      <li>Na een paar seconden verschijnt "... is geopend." De opening komt bij Wijzigingen op de pagina Codes en badges, met je naam.</li>
-    </ol>`],
-  ["historiek", "Historiek", `
-    ${htbl(["Onderdeel", "Uitleg"], [
-      ["Zoeken", "Op naam of badgenummer; kies een naam uit de lijst om enkel die persoon te zien"],
-      ["Deur, status, periode", "Alle deuren of een deur; alles, geopend of geweigerd; vandaag tot 1 jaar of een eigen periode"],
-      ["Toegangen", "Elke toegang met datum, uur, deur, naam, methode en status; camera-icoon = foto"],
-      ["Per persoon", "Per persoon het aantal toegangen, geopend, laatste keer en deuren; klik op een naam om te filteren"],
-      ["CSV", "De gefilterde toegangen als bestand voor Excel"]])}
-    <p><b>Namen zonder persoon.</b> Een rij zonder naam krijgt een label volgens de manier van openen:</p>
-    ${htbl(["Label", "Betekenis"], [
-      ["Binnenpost 9901, 9902, 9903", "Geopend via die binnenpost"],
-      ["Op afstand", "Geopend met de knop Deur openen; bij Hoe staat wie het deed"],
-      ["Foute code", "Iemand typte een code die niet bestaat of niet geldig is voor die deur"],
-      ["Onbekende badge", "Een badge die niet gekend is (zie Nieuwe badge)"],
-      ["Ongeldige invoer", "Onvolledige invoer op het klavier"],
-      ["Exitknop", "Geopend met de knop aan de binnenkant"]])}
-    <p>Deze labels tellen niet mee als persoon.</p>`],
-  ["codes", "Codes en badges", `
-    <p>Bovenaan zoek je op naam, code of badgenummer. De tabbladen tonen Actief, Geblokkeerd, Uit dienst of Alles. Codes staan verborgen;
-    met Codes tonen zie je ze. Klik op een naam voor de toegangsgeschiedenis van die persoon.</p>
-    ${htbl(["Status", "Betekenis"], [
-      ["Actief", "Staat op de toestellen en werkt"],
-      ["Wacht op begin", "De geldigheid begint later; de code staat nog niet op het toestel en komt er vanzelf op"],
-      ["Geblokkeerd", "Tijdelijk van de toestellen gehaald, tot een tijdstip of tot je deblokkeert"],
-      ["Uit dienst", "Van de toestellen gehaald en bewaard; herstellen kan altijd"]])}
-    <p><b>Tijdelijke code</b> (pakket, technicus, gast): de snelste manier.</p>
-    <ol>
-      <li>Klik op Tijdelijke code.</li>
-      <li>Kies Pakket, Technicus, Gast of Andere. Dat vult de naam en de geldigheid al in; pas de naam aan, bv. "Pakket bol".</li>
-      <li>Vink de deur of deuren aan. Je laatste keuze wordt onthouden.</li>
-      <li>Kies hoe lang: 1 uur, Vandaag (tot 23u59), 24 uur, 3 dagen, 1 week of Eigen (met begin en einde).</li>
-      <li>Eenmalig staat aan bij Pakket: na de eerste opening gaat de code vanzelf uit dienst.</li>
-      <li>Klik op Maak code en deel. Home Assistant kiest een willekeurige vrije code van 6 cijfers (geen 123456, 111111 of gelijkaardige) en het deelvenster opent meteen.</li>
-    </ol>
-    <p>Na het einde of na het eenmalig gebruik gaat de code vanzelf uit dienst. Ze blijft in de lijst Uit dienst, zodat je ziet wie wanneer binnenkwam.</p>
-    <p><b>Nieuwe code</b></p>
-    <ol>
-      <li>Klik op Nieuwe code.</li>
-      <li>Vul de naam en een code van 6 tot 8 cijfers in.</li>
-      <li>Vink de deuren aan.</li>
-      <li>Vul eventueel Geldig vanaf en Geldig tot in. Leeg = vanaf nu, zonder einde.</li>
-      <li>Klik op Opslaan. Het toestel is traag: reken op 10 tot 20 seconden.</li>
-      <li>Het deelvenster opent vanzelf. Kies WhatsApp, Sms, Mail of Kopieer tekst.</li>
-    </ol>
-    <p><b>Delen.</b> De knop Delen staat bij elke code. De tekst bevat naam, code, deur(en), geldigheid en hoe je opent (# code #).
-    Je kunt de tekst nog aanpassen. WhatsApp, sms en mail openen met de tekst klaar; de ontvanger kies je daar zelf.</p>
-    ${htbl(["Knop", "Wat er gebeurt"], [
-      ["Aanpassen", "Naam, code, deuren en geldigheid wijzigen (bij een badge: naam en geldigheid)"],
-      ["Blokkeren", "Van alle toestellen tot een tijdstip of tot je deblokkeert; met een einde komt de code vanzelf terug"],
-      ["Deblokkeren", "Zet exact dezelfde code of badge terug op dezelfde deuren"],
-      ["Nu al activeren", "Een wachtende code meteen op de toestellen zetten"],
-      ["Uit dienst", "Van alle toestellen, bewaard in de lijst Uit dienst"],
-      ["Herstellen", "Terug actief op dezelfde deuren; een verlopen einddatum vervalt"],
-      ["Definitief verwijderen", "Enkel bij Uit dienst; weg uit de lijst, de historiek blijft"]])}
-    <p><b>Geldigheid.</b> De toestellen kennen geen datums voor codes. Home Assistant regelt het: voor het begin staat de code niet op
-    het toestel, na het einde gaat ze vanzelf uit dienst. Dat gebeurt binnen de minuut.</p>
-    <p><b>Nieuwe badge</b></p>
-    <ol>
-      <li>Hou de nieuwe badge tegen een lezer. Ze wordt geweigerd; dat is de bedoeling.</li>
-      <li>Klik op Nieuwe badge. Het nummer staat bij Onlangs geweigerd; klik erop.</li>
-      <li>Vul de naam in, vink de deuren aan en klik op Opslaan.</li>
-    </ol>
-    <p><b>Wijzigingen.</b> Onderaan staat wie wat wanneer deed, ook wat de planner automatisch deed (begin en einde van geldigheid,
-    einde van een blokkering).</p>`],
-  ["fotos", "Foto's", `
-    <p>Bij elke toegang neemt Home Assistant een foto met de camera van de buitenpost. Enkel beheerders zien ze. Foto's worden na 30 dagen
-    automatisch gewist: de Belgische camerawet laat camerabeelden maximaal een maand bewaren, tenzij ze als bewijs nodig zijn.
-    Cafe maakt foto's; Kammerstraat nog niet (camera moet ter plaatse aangezet worden).</p>`],
-  ["werking", "Goed om te weten", `
-    ${htbl(["Onderwerp", "Uitleg"], [
-      ["Snelheid", "Een actie op een toestel duurt 10 tot 20 seconden; wacht op de melding"],
-      ["Veiligheid", "Voor elke wijziging kijkt Home Assistant op het toestel na of alles nog klopt; zo niet, dan gebeurt er niets"],
-      ["Niets verloren", "Blokkeren en uit dienst bewaren eerst een kopie; deblokkeren en herstellen zetten exact hetzelfde terug"],
-      ["Wijzigingen op het toestel zelf", "Worden vanzelf overgenomen in de lijst"],
-      ["Historiek", "Het toestel onthoudt 1000 toegangen; Home Assistant bewaart ze 400 dagen"]])}
-    <p class="muted">Bron camerawet: besafe.be, bewaartermijn camerabeelden.</p>`],
-];
+/* ------------------------------------------------------------------ handleiding (gedeelde opbouw)
+   Opbouw: zoeken, "Wat wil je doen?" als tegels met korte stappen, uitleg per scherm inklapbaar, begrippen. */
+const HELP_CSS = `
+  .hp { max-width: 980px; line-height: 1.5; }
+  .hp-search { width: 100%; max-width: 420px; margin: 0 0 14px; }
+  .hp h3 { font-size: 1.05rem; font-weight: 500; margin: 18px 0 10px; }
+  .hp-tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)); gap: 10px; }
+  .hp-tile { display: flex; gap: 10px; align-items: flex-start; text-align: left; font: inherit; color: var(--primary-text-color);
+    background: var(--secondary-background-color); border: 1px solid transparent; border-radius: 10px; padding: 12px; cursor: pointer; }
+  .hp-tile:hover, .hp-tile.on { border-color: var(--primary-color); }
+  .hp-tile ha-icon { color: var(--primary-color); flex: none; --mdc-icon-size: 22px; }
+  .hp-tile b { display: block; font-weight: 500; }
+  .hp-tile span { font-size: 0.85rem; color: var(--secondary-text-color); }
+  .hp-steps { border: 1px solid var(--primary-color); border-radius: 10px; padding: 12px 16px; margin: 12px 0 4px; }
+  .hp-steps h4 { margin: 0 0 6px; font-size: 1rem; font-weight: 500; display: flex; justify-content: space-between; gap: 8px; flex-wrap: wrap; }
+  .hp-steps ol { margin: 4px 0 6px; padding-left: 22px; }
+  .hp-steps li { margin: 3px 0; }
+  .hp-steps .hp-tip { font-size: 0.85rem; color: var(--secondary-text-color); margin: 4px 0 0; }
+  .hp details { border-bottom: 1px solid var(--divider-color); }
+  .hp summary { cursor: pointer; padding: 10px 2px; list-style: none; display: flex; gap: 10px; align-items: baseline; }
+  .hp summary::-webkit-details-marker { display: none; }
+  .hp summary::before { content: "+"; width: 14px; color: var(--primary-color); font-weight: 600; flex: none; }
+  .hp details[open] summary::before { content: "\\2212"; }
+  .hp summary b { font-weight: 500; }
+  .hp summary span { font-size: 0.85rem; color: var(--secondary-text-color); }
+  .hp .body { padding: 0 2px 12px 24px; }
+  .hp .body p { margin: 4px 0 8px; }
+  .hp .body td:first-child, .hp-terms td:first-child { white-space: nowrap; font-weight: 500; width: 1%; }
+  .hp .hidden { display: none; }
+  .hp .none { color: var(--secondary-text-color); padding: 8px 0; }
+  @media (max-width: 640px) { .hp .body td:first-child, .hp-terms td:first-child { white-space: normal; } .hp .body { padding-left: 6px; } }
+`;
+const hpTable = (rows) => `<div class="scroll"><table><tbody>${rows.map((r) => `<tr>${r.map((c) => `<td>${c}</td>`).join("")}</tr>`).join("")}</tbody></table></div>`;
+function helpHtml(doc) {
+  return `<div class="hp">
+    <input class="hp-search" type="search" placeholder="Zoek in de handleiding, ${doc.hint || ""}" aria-label="Zoek in de handleiding">
+    <h3>Wat wil je doen?</h3>
+    <div class="hp-tiles">${doc.tasks.map((t, i) => `<button class="hp-tile" data-task="${i}"><ha-icon icon="${t.icon}"></ha-icon><div><b>${t.title}</b><span>${t.sub}</span></div></button>`).join("")}</div>
+    <div class="hp-steps hidden"></div>
+    <div class="none hidden">Niets gevonden.</div>
+    <h3>Uitleg per scherm</h3>
+    ${doc.topics.map((t) => `<details data-topic><summary><b>${t.title}</b><span>${t.sub}</span></summary><div class="body">${t.html}</div></details>`).join("")}
+    <h3>Begrippen</h3>
+    <div class="hp-terms">${hpTable(doc.terms)}</div>
+    ${doc.foot ? `<p class="muted" style="font-size:0.8rem;margin-top:12px">${doc.foot}</p>` : ""}
+  </div>`;
+}
+function wireHelp(root, doc, openTab) {
+  const steps = root.querySelector(".hp-steps");
+  const show = (i) => {
+    const t = doc.tasks[i];
+    root.querySelectorAll(".hp-tile").forEach((b) => b.classList.toggle("on", Number(b.dataset.task) === i));
+    steps.innerHTML = `<h4><span>${t.title}</span>${t.tab ? `<button class="btn" data-open-tab="${t.tab}">Naar ${t.tabName || t.tab} &rsaquo;</button>` : ""}</h4>
+      <ol>${t.steps.map((s) => `<li>${s}</li>`).join("")}</ol>${t.tip ? `<p class="hp-tip">${t.tip}</p>` : ""}`;
+    steps.classList.remove("hidden");
+    const ob = steps.querySelector("[data-open-tab]");
+    if (ob) ob.addEventListener("click", () => openTab(ob.dataset.openTab));
+    steps.scrollIntoView({ block: "nearest", behavior: "smooth" });
+  };
+  root.querySelectorAll(".hp-tile").forEach((b) => b.addEventListener("click", () => show(Number(b.dataset.task))));
+  const text = (html) => html.replace(/<[^>]+>/g, " ").toLowerCase();
+  const input = root.querySelector(".hp-search");
+  input.addEventListener("input", () => {
+    const q = input.value.trim().toLowerCase();
+    let hits = 0;
+    root.querySelectorAll(".hp-tile").forEach((b) => {
+      const t = doc.tasks[Number(b.dataset.task)];
+      const ok = !q || text(`${t.title} ${t.sub} ${t.steps.join(" ")} ${t.tip || ""}`).includes(q);
+      b.classList.toggle("hidden", !ok); hits += ok;
+    });
+    root.querySelectorAll("details[data-topic]").forEach((d, i) => {
+      const t = doc.topics[i];
+      const ok = !q || text(`${t.title} ${t.sub} ${t.html}`).includes(q);
+      d.classList.toggle("hidden", !ok); d.open = !!q && ok; hits += ok;
+    });
+    if (q) steps.classList.add("hidden");
+    root.querySelector(".none").classList.toggle("hidden", hits > 0);
+  });
+}
+
+const HELP_DOC = {
+  hint: "bv. tijdelijke code of badge",
+  tasks: [
+    { icon: "mdi:timer-outline", title: "Tijdelijke code geven", sub: "Pakket, technicus of gast", tab: "codes", tabName: "Codes en badges",
+      steps: ["Open <b>Codes en badges</b> en klik op <b>Tijdelijke code</b>.", "Kies <b>Pakket</b>, <b>Technicus</b>, <b>Gast</b> of <b>Andere</b>; pas de naam aan, bv. \"Pakket bol\".", "Vink de deur of deuren aan (je laatste keuze wordt onthouden).", "Kies hoe lang: 1 uur, Vandaag, 24 uur, 3 dagen, 1 week of Eigen.", "Laat <b>Eenmalig</b> aan voor een pakket: na de eerste opening vervalt de code.", "Klik op <b>Maak code en deel</b> en kies WhatsApp, Sms, Mail of Kopieer tekst."],
+      tip: "Home Assistant kiest zelf een willekeurige, vrije code van 6 cijfers. Na het einde gaat ze vanzelf uit dienst." },
+    { icon: "mdi:account-key", title: "Vaste code toevoegen", sub: "Voor een medewerker of vrijwilliger", tab: "codes", tabName: "Codes en badges",
+      steps: ["Open <b>Codes en badges</b> en klik op <b>Nieuwe code</b>.", "Vul de naam en een code van 6 tot 8 cijfers in.", "Vink de deuren aan.", "Eventueel <b>Geldig vanaf</b> en <b>Geldig tot</b>; leeg = vanaf nu, zonder einde.", "Klik op <b>Opslaan</b> (10 tot 20 seconden) en deel de code in het venster dat opent."] },
+    { icon: "mdi:share-variant", title: "Een code (opnieuw) delen", sub: "WhatsApp, sms, mail of kopieer", tab: "codes", tabName: "Codes en badges",
+      steps: ["Zoek de persoon in <b>Codes en badges</b>.", "Klik op <b>Delen</b>.", "Pas de tekst eventueel aan en kies WhatsApp, Sms, Mail of Kopieer tekst. De ontvanger kies je daar zelf."],
+      tip: "De tekst vermeldt de deur(en), de geldigheid en hoe je opent: # code #." },
+    { icon: "mdi:lock-clock", title: "Iemand tijdelijk blokkeren", sub: "Tot een datum of tot je deblokkeert", tab: "codes", tabName: "Codes en badges",
+      steps: ["Zoek de persoon en klik op <b>Blokkeren</b>.", "Kies <b>Tot</b> een datum en uur, of <b>Tot ik deblokkeer</b>.", "Klik op <b>Blokkeren</b>: de code of badge werkt meteen niet meer.", "Met een einddatum komt ze vanzelf terug; anders klik je later op <b>Deblokkeren</b>."] },
+    { icon: "mdi:account-cancel", title: "Iemand de toegang afnemen", sub: "Uit dienst, later herstelbaar", tab: "codes", tabName: "Codes en badges",
+      steps: ["Zoek de persoon en klik op <b>Uit dienst</b>.", "Bevestig. De code of badge wordt van alle deuren gehaald en bewaard.", "Terug nodig? Tab <b>Uit dienst</b>, klik op <b>Herstellen</b>. Definitief weg: <b>Definitief verwijderen</b>."] },
+    { icon: "mdi:card-account-details-outline", title: "Nieuwe badge registreren", sub: "Badge voor de lezer houden en kiezen", tab: "codes", tabName: "Codes en badges",
+      steps: ["Hou de nieuwe badge tegen een lezer. Ze wordt geweigerd; dat is de bedoeling.", "Klik op <b>Nieuwe badge</b>. Het nummer staat bij Onlangs geweigerd; klik erop.", "Vul de naam in, vink de deuren aan en klik op <b>Opslaan</b>."] },
+    { icon: "mdi:door-open", title: "Deur openen op afstand", sub: "Vanop de pagina Overzicht", tab: "overzicht", tabName: "Overzicht",
+      steps: ["Open <b>Overzicht</b>.", "Klik bij de juiste deur op <b>Deur openen</b>.", "De knop wordt rood: klik binnen 6 seconden nog eens.", "\"... is geopend.\" verschijnt. In de historiek staat Op afstand met je naam."],
+      tip: "Enkel voor beheerders. Elke opening op afstand staat bij Wijzigingen." },
+    { icon: "mdi:history", title: "Nagaan wie binnenkwam", sub: "Zoeken, per persoon, CSV", tab: "historiek", tabName: "Historiek",
+      steps: ["Open <b>Historiek</b>.", "Zoek op naam of kies een deur, geopend of geweigerd, en een periode.", "Klik op <b>Per persoon</b> voor een overzicht per persoon; klik op een naam om te filteren.", "Camera-icoon = foto van die toegang. <b>CSV</b> geeft alles voor Excel."] },
+  ],
+  topics: [
+    { title: "Overzicht", sub: "Status per deur, laatste toegang, deur openen", html: hpTable([["Kaart per deur", "Online of Offline, laatste toegang (wie, hoe, wanneer) met foto, aantallen van vandaag, codes en badges"], ["Deur openen", "Enkel beheerders, met bevestiging"], ["Recente toegangen", "De laatste 6 van die deur"]]) },
+    { title: "Historiek", sub: "Toegangen van het laatste jaar", html: `<p>Filters: zoeken, deur, status, periode (vandaag tot 1 jaar of eigen). Weergave Toegangen of Per persoon. CSV voor Excel.</p>` + hpTable([["Binnenpost 9901, 9902, 9903", "Geopend via die binnenpost"], ["Op afstand", "Geopend met Deur openen; bij Hoe staat wie"], ["Foute code", "Een code die niet bestaat of niet geldig is voor die deur"], ["Onbekende badge", "Een badge die niet gekend is"], ["Ongeldige invoer", "Onvolledige invoer op het klavier"], ["Exitknop", "Geopend met de knop binnen"]]) },
+    { title: "Codes en badges", sub: "Statussen en knoppen", html: hpTable([["Actief", "Staat op de toestellen en werkt"], ["Wacht op begin", "Geldigheid begint later; komt er vanzelf op (of Nu al activeren)"], ["Geblokkeerd", "Tijdelijk van de toestellen, tot een tijdstip of tot deblokkeren"], ["Uit dienst", "Van de toestellen, bewaard en herstelbaar"], ["Eenmalig", "Vervalt na de eerste opening"], ["Wijzigingen", "Onderaan: wie wat wanneer deed, ook de planner en openen op afstand"]]) },
+    { title: "Aan de deur", sub: "Hoe open je", html: hpTable([["Code", "Typ <b># code #</b> op het klavier"], ["Badge", "Hou de badge tegen de lezer"], ["Binnenpost", "Opentoets op de binnenpost"]]) },
+    { title: "Foto's", sub: "Bij elke toegang, 30 dagen", html: `<p>Bij elke toegang neemt Home Assistant een foto met de camera van de buitenpost. Enkel beheerders zien ze. Na 30 dagen worden ze gewist: de Belgische camerawet laat camerabeelden maximaal een maand bewaren, tenzij als bewijs nodig. Kammerstraat maakt nog geen foto's (camera moet ter plaatse aangezet worden).</p>` },
+    { title: "Goed om te weten", sub: "Snelheid en veiligheid", html: hpTable([["Snelheid", "Een actie op een toestel duurt 10 tot 20 seconden"], ["Veiligheid", "Voor elke wijziging wordt het toestel nagekeken; klopt iets niet, dan gebeurt er niets"], ["Niets verloren", "Blokkeren en uit dienst bewaren eerst een kopie"], ["Archief", "Het toestel onthoudt 1000 toegangen; Home Assistant bewaart ze 400 dagen"]]) },
+  ],
+  terms: [
+    ["Code", "6 tot 8 cijfers, openen met # code #"], ["Badge", "Kaart of sleutelhanger voor de lezer"],
+    ["Binnenpost", "Toestel binnen (9901, 9902, 9903) waarmee iemand de deur opent"], ["Geldigheid", "Van en tot wanneer een code werkt"],
+    ["Uit dienst", "Niet meer op de deuren, maar bewaard en herstelbaar"], ["Planner", "Home Assistant zelf: zet codes erop en eraf op het juiste moment"],
+  ],
+  foot: "Bron bewaartermijn camerabeelden: besafe.be.",
+};
 
 class VtoHandleiding extends VtoBase {
   _init() {
-    this.shadowRoot.innerHTML = `<style>${BASE_CSS}
-      .help { max-width: 920px; line-height: 1.5; }
-      .help p { margin: 6px 0 10px; }
-      .help ol { margin: 6px 0 10px; padding-left: 22px; }
-      .help section { scroll-margin-top: 12px; }
-      .help h3 { margin: 22px 0 8px; font-size: 1.05rem; font-weight: 500; }
-      .help td:first-child { white-space: nowrap; font-weight: 500; }
-      .jump { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 8px; }
-      @media (max-width: 640px) { .help td:first-child { white-space: normal; } }
-    </style>
-    <ha-card><div class="title">${esc(this._config.title || "Handleiding toegangscontrole")}</div>
-      <div class="help"><div class="jump">${VTO_HELP.map(([k, t]) => `<button class="btn" data-go="${k}">${esc(t)}</button>`).join("")}</div>
-      ${VTO_HELP.map(([k, t, html]) => `<section id="h_${k}"><h3>${esc(t)}</h3>${html}</section>`).join("")}</div></ha-card>`;
-    this.shadowRoot.querySelectorAll("[data-go]").forEach((b) => b.addEventListener("click", () => {
-      const el = this.shadowRoot.getElementById("h_" + b.dataset.go);
-      if (el) el.scrollIntoView({ behavior: "smooth", block: "start" });
-    }));
+    this.shadowRoot.innerHTML = `<style>${BASE_CSS}${HELP_CSS}</style>
+    <ha-card><div class="title">${esc(this._config.title || "Handleiding toegangscontrole")}</div><div id="hb">${helpHtml(HELP_DOC)}</div></ha-card>`;
+    wireHelp(this.shadowRoot.getElementById("hb"), HELP_DOC, (view) => {
+      // naar een andere pagina van hetzelfde dashboard
+      const base = location.pathname.split("/").slice(0, 2).join("/");
+      history.pushState(null, "", `${base}/${view}`);
+      window.dispatchEvent(new CustomEvent("location-changed", { detail: { replace: false } }));
+    });
   }
   getCardSize() { return 12; }
   static getStubConfig() { return {}; }
@@ -1373,7 +1375,7 @@ class VtoHandleiding extends VtoBase {
 // exist"). Daarom registreren we opnieuw zolang het nodig is, telkens via window.customElements
 // (het register dat NU actief is) en met een nieuwe subklasse (een constructor mag maar een keer).
 const CARD_CLASSES = [["btechnics-vto-overzicht", VtoOverzicht], ["btechnics-vto-toegang", VtoToegang], ["btechnics-vto-codes", VtoCodes], ["btechnics-vto-handleiding", VtoHandleiding]];
-const CARDS_VERSION = "0.8.0";
+const CARDS_VERSION = "0.8.1";
 const define = (name, cls) => {
   if (window.customElements.get(name)) return;
   try {
