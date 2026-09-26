@@ -878,12 +878,14 @@ class VtoCodes extends VtoBase {
     const { entries, audit } = this._data;
     const $ = (id) => this.shadowRoot.getElementById(id);
     const count = (s) => entries.filter((e) => e.status === s).length;
-    const tabs = [["active", "Actief", count("active")], ["blocked", "Geblokkeerd", count("blocked")],
-      ["retired", "Uit dienst", count("retired")], ["all", "Alles", entries.length]];
+    // tijdelijk: met een geldigheid of een maximum aantal keer, en nog niet uit dienst
+    const temp = (e) => e.status !== "retired" && !!(e.valid_until || e.valid_from || e.max_uses);
+    const tabs = [["active", "Actief", count("active")], ["temp", "Tijdelijk", entries.filter(temp).length],
+      ["blocked", "Geblokkeerd", count("blocked")], ["retired", "Uit dienst", count("retired")], ["all", "Alles", entries.length]];
     $("tabs").innerHTML = tabs.map(([v, l, n]) => `<button class="btn ${this._status === v ? "active" : ""}" data-tab="${v}">${l} (${n})</button>`).join("");
     $("tabs").querySelectorAll("[data-tab]").forEach((b) => b.addEventListener("click", () => { this._status = b.dataset.tab; this._render(); }));
     const q = this._q;
-    const list = entries.filter((e) => (this._status === "all" || e.status === this._status)
+    const list = entries.filter((e) => (this._status === "all" || (this._status === "temp" ? temp(e) : e.status === this._status))
       && (this._kind === "all" || e.kind === this._kind)
       && (!q || e.name.toLowerCase().includes(q) || String(e.secret).toLowerCase().includes(q)));
     const sec = (e) => e.kind === "badge"
@@ -1321,7 +1323,7 @@ const HELP_DOC = {
   tasks: [
     { icon: "mdi:timer-outline", title: "Tijdelijke code geven", sub: "Pakket, technicus of gast", tab: "codes", tabName: "Codes en badges",
       steps: ["Open <b>Codes en badges</b> en klik op <b>Tijdelijke code</b>.", "Kies <b>Pakket</b>, <b>Technicus</b>, <b>Gast</b> of <b>Andere</b>; pas de naam aan, bv. \"Pakket bol\".", "Vink de deur of deuren aan (je laatste keuze wordt onthouden).", "Kies hoe lang: 1 uur, Vandaag, 24 uur, 3 dagen, 1 week of Eigen.", "Laat <b>Eenmalig</b> aan voor een pakket: na de eerste opening vervalt de code.", "Klik op <b>Maak code en deel</b> en kies WhatsApp, Sms, Mail of Kopieer tekst."],
-      tip: "Home Assistant kiest zelf een willekeurige, vrije code van 6 cijfers. Na het einde gaat ze vanzelf uit dienst." },
+      tip: "Home Assistant kiest zelf een willekeurige, vrije code van 6 cijfers. Na het einde gaat ze vanzelf uit dienst. Alle lopende tijdelijke codes vind je terug in de tab Tijdelijk." },
     { icon: "mdi:account-key", title: "Vaste code toevoegen", sub: "Voor een medewerker of vrijwilliger", tab: "codes", tabName: "Codes en badges",
       steps: ["Open <b>Codes en badges</b> en klik op <b>Nieuwe code</b>.", "Vul de naam en een code van 6 tot 8 cijfers in.", "Vink de deuren aan.", "Eventueel <b>Geldig vanaf</b> en <b>Geldig tot</b>; leeg = vanaf nu, zonder einde.", "Klik op <b>Opslaan</b> (10 tot 20 seconden) en deel de code in het venster dat opent."] },
     { icon: "mdi:share-variant", title: "Een code (opnieuw) delen", sub: "WhatsApp, sms, mail of kopieer", tab: "codes", tabName: "Codes en badges",
@@ -1342,7 +1344,7 @@ const HELP_DOC = {
   topics: [
     { title: "Overzicht", sub: "Status per deur, laatste toegang, deur openen", html: hpTable([["Kaart per deur", "Online of Offline, laatste toegang (wie, hoe, wanneer) met foto, aantallen van vandaag, codes en badges"], ["Deur openen", "Enkel beheerders, met bevestiging"], ["Recente toegangen", "De laatste 6 van die deur"]]) },
     { title: "Historiek", sub: "Toegangen van het laatste jaar", html: `<p>Filters: zoeken, deur, status, periode (vandaag tot 1 jaar of eigen). Weergave Toegangen of Per persoon. CSV voor Excel.</p>` + hpTable([["Binnenpost 9901, 9902, 9903", "Geopend via die binnenpost"], ["Op afstand", "Geopend met Deur openen; bij Hoe staat wie"], ["Foute code", "Een code die niet bestaat of niet geldig is voor die deur"], ["Onbekende badge", "Een badge die niet gekend is"], ["Ongeldige invoer", "Onvolledige invoer op het klavier"], ["Exitknop", "Geopend met de knop binnen"]]) },
-    { title: "Codes en badges", sub: "Statussen en knoppen", html: hpTable([["Actief", "Staat op de toestellen en werkt"], ["Wacht op begin", "Geldigheid begint later; komt er vanzelf op (of Nu al activeren)"], ["Geblokkeerd", "Tijdelijk van de toestellen, tot een tijdstip of tot deblokkeren"], ["Uit dienst", "Van de toestellen, bewaard en herstelbaar"], ["Eenmalig", "Vervalt na de eerste opening"], ["Wijzigingen", "Onderaan: wie wat wanneer deed, ook de planner en openen op afstand"]]) },
+    { title: "Codes en badges", sub: "Statussen en knoppen", html: hpTable([["Actief", "Staat op de toestellen en werkt"], ["Tijdelijk (tab)", "Alle codes met een geldigheid of eenmalig gebruik die nog niet uit dienst zijn, ook de wachtende"], ["Wacht op begin", "Geldigheid begint later; komt er vanzelf op (of Nu al activeren)"], ["Geblokkeerd", "Tijdelijk van de toestellen, tot een tijdstip of tot deblokkeren"], ["Uit dienst", "Van de toestellen, bewaard en herstelbaar"], ["Eenmalig", "Vervalt na de eerste opening"], ["Wijzigingen", "Onderaan: wie wat wanneer deed, ook de planner en openen op afstand"]]) },
     { title: "Aan de deur", sub: "Hoe open je", html: hpTable([["Code", "Typ <b># code #</b> op het klavier"], ["Badge", "Hou de badge tegen de lezer"], ["Binnenpost", "Opentoets op de binnenpost"]]) },
     { title: "Foto's", sub: "Bij elke toegang, 30 dagen", html: `<p>Bij elke toegang neemt Home Assistant een foto met de camera van de buitenpost. Enkel beheerders zien ze. Na 30 dagen worden ze gewist: de Belgische camerawet laat camerabeelden maximaal een maand bewaren, tenzij als bewijs nodig. Kammerstraat maakt nog geen foto's (camera moet ter plaatse aangezet worden).</p>` },
     { title: "Goed om te weten", sub: "Snelheid en veiligheid", html: hpTable([["Snelheid", "Een actie op een toestel duurt 10 tot 20 seconden"], ["Veiligheid", "Voor elke wijziging wordt het toestel nagekeken; klopt iets niet, dan gebeurt er niets"], ["Niets verloren", "Blokkeren en uit dienst bewaren eerst een kopie"], ["Archief", "Het toestel onthoudt 1000 toegangen; Home Assistant bewaart ze 400 dagen"]]) },
@@ -1375,7 +1377,7 @@ class VtoHandleiding extends VtoBase {
 // exist"). Daarom registreren we opnieuw zolang het nodig is, telkens via window.customElements
 // (het register dat NU actief is) en met een nieuwe subklasse (een constructor mag maar een keer).
 const CARD_CLASSES = [["btechnics-vto-overzicht", VtoOverzicht], ["btechnics-vto-toegang", VtoToegang], ["btechnics-vto-codes", VtoCodes], ["btechnics-vto-handleiding", VtoHandleiding]];
-const CARDS_VERSION = "0.8.1";
+const CARDS_VERSION = "0.8.3";
 const define = (name, cls) => {
   if (window.customElements.get(name)) return;
   try {
