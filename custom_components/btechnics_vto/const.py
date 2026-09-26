@@ -30,4 +30,13 @@ ARCHIVE_KEEP_DAYS = 400
 TABLE_CODES = "AccessControlCommonPassword"
 TABLE_CARDS = "AccessControlCard"
 TABLE_LOG = "AccessControlCardRec"
-METHODS = {0: "code", 1: "badge", 2: "vingerafdruk", 3: "gezicht", 4: "app", 5: "knop", 6: "VTH"}
+# Methode van een toegang (veld Method). Bronnen: Dahua Access Control Products Integration Instruction
+# (0 code, 1 badge, 2 badge dan code, 3 code dan badge, 6 vingerafdruk, 15 gezicht), rroller/dahua #318
+# (5 exitknop). 4 en 20 vastgesteld op de toestellen zelf (september 2026): 4 is altijd geopend, zonder
+# naam, met het nummer van de binnenpost (9901, 9902, 9903) in RoomNumber; 20 is altijd geweigerd met
+# willekeurige ingetypte cijfers in RoomNumber (die worden bewust nergens bewaard of getoond).
+METHODS = {
+    0: "code", 1: "badge", 2: "badge en code", 3: "code en badge", 4: "binnenpost", 5: "exitknop",
+    6: "vingerafdruk", 15: "gezicht", 20: "ongeldige invoer klavier",
+}
+METHOD_INDOOR = 4
