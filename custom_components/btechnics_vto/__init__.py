@@ -801,19 +801,18 @@ def _register_services(hass: HomeAssistant):
             host = urlparse(c.client.base).hostname
             extra = {}
             extra["dhip_5000"] = await hass.async_add_executor_job(dhip.probe, host, c.client.user, c.client._pw, 2)
-            try:
-                from homeassistant.components.ffmpeg import async_get_image
-                from homeassistant.setup import async_setup_component
-                if "ffmpeg" not in hass.config.components:
-                    await async_setup_component(hass, "ffmpeg", {})
-                url = (f"rtsp://{quote(c.client.user, safe='')}:{quote(c.client._pw, safe='')}@{host}:554"
-                       "/cam/realmonitor?channel=1&subtype=0")
+            from .camera import rtsp_frame, rtsp_url
+            for sub in (0, 1):
                 t0 = time.monotonic()
-                img = await asyncio.wait_for(async_get_image(hass, url), 15)
-                extra["rtsp_foto"] = ({"ok": True, "bytes": len(img), "ms": int((time.monotonic() - t0) * 1000)}
-                                      if img else {"ok": False, "fout": "geen beeld"})
-            except Exception as e:  # noqa: BLE001  diagnose
-                extra["rtsp_foto"] = {"ok": False, "fout": str(e)[:200]}
+                try:
+                    img = await rtsp_frame(hass, rtsp_url(c.client, sub))
+                    extra[f"rtsp_foto_{sub}"] = {"ok": True, "bytes": len(img), "ms": int((time.monotonic() - t0) * 1000)}
+                    break
+                except Exception as e:  # noqa: BLE001  diagnose
+                    extra[f"rtsp_foto_{sub}"] = {"ok": False, "fout": str(e)[:200]}
+            cam = getattr(c, "camera", None)
+            extra["gekozen_methode"] = getattr(cam, "method", None)
+            extra["gebeurtenissen_nu"] = getattr(c, "events_state", None)
             try:
                 res = await hass.async_add_executor_job(c.client.camera_probe)
                 res["realtime"] = extra

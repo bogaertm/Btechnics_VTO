@@ -404,8 +404,14 @@ async def test_bewaarde_code_niet_naar_bestaande_code(hass, devices):
     assert reg(hass).managed[cid]["code"] == "936100"
 
 
-async def test_camera_probe_enkel_beheerders(hass, devices, hass_read_only_user):
+async def test_camera_probe_enkel_beheerders(hass, devices, hass_read_only_user, monkeypatch):
     from homeassistant.core import Context
+    from custom_components.btechnics_vto import camera, dhip
+
+    async def no_rtsp(hass, url, timeout=12):
+        raise TimeoutError("geen netwerk in de test")
+    monkeypatch.setattr(camera, "rtsp_frame", no_rtsp)
+    monkeypatch.setattr(dhip, "probe", lambda *a, **k: {"ok": False, "fout": "test"})
     await setup_two_entries(hass)
     r = await call(hass, "camera_probe", {}, True)
     assert [x["deur"] for x in r["toestellen"]] == ["Cafe", "Kammerstraat"] and r["toestellen"][0]["foto_kanaal_1"]["ok"]
