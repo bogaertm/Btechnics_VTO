@@ -810,6 +810,9 @@ def _register_services(hass: HomeAssistant):
                     break
                 except Exception as e:  # noqa: BLE001  diagnose
                     extra[f"rtsp_foto_{sub}"] = {"ok": False, "fout": str(e)[:200]}
+            if not any(v.get("ok") for k, v in extra.items() if k.startswith("rtsp_foto")):
+                from .camera import rtsp_describe
+                extra["rtsp_stappen"] = await hass.async_add_executor_job(rtsp_describe, c.client, 0)
             cam = getattr(c, "camera", None)
             extra["gekozen_methode"] = getattr(cam, "method", None)
             extra["gebeurtenissen_nu"] = getattr(c, "events_state", None)

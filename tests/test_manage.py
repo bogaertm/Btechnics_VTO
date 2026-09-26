@@ -411,6 +411,7 @@ async def test_camera_probe_enkel_beheerders(hass, devices, hass_read_only_user,
     async def no_rtsp(hass, url, timeout=12):
         raise TimeoutError("geen netwerk in de test")
     monkeypatch.setattr(camera, "rtsp_frame", no_rtsp)
+    monkeypatch.setattr(camera, "rtsp_describe", lambda *a: {"test": True})
     monkeypatch.setattr(dhip, "probe", lambda *a, **k: {"ok": False, "fout": "test"})
     await setup_two_entries(hass)
     r = await call(hass, "camera_probe", {}, True)

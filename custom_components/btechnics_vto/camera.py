@@ -209,3 +209,46 @@ class DoorCamera:
             return False
         self._last = now
         return True
+
+
+def rtsp_describe(client, subtype: int = 0) -> dict:
+    """Diagnose: RTSP DESCRIBE met digest, stap voor stap (antwoordcodes, geen beelden)."""
+    import hashlib
+    import re
+    import socket as _s
+    host = urlparse(client.base).hostname
+    path = f"/cam/realmonitor?channel=1&subtype={subtype}"
+    uri = f"rtsp://{host}:554{path}"
+    out = {}
+
+    def req(sock, cseq, auth=None):
+        lines = [f"DESCRIBE {uri} RTSP/1.0", f"CSeq: {cseq}", "Accept: application/sdp", "User-Agent: btechnics_vto"]
+        if auth:
+            lines.append(auth)
+        sock.sendall(("\r\n".join(lines) + "\r\n\r\n").encode())
+        data = b""
+        while b"\r\n\r\n" not in data:
+            chunk = sock.recv(4096)
+            if not chunk:
+                break
+            data += chunk
+        return data.decode("latin-1")
+
+    try:
+        with _s.create_connection((host, 554), timeout=5) as sock:
+            r1 = req(sock, 1)
+            out["zonder_login"] = r1.split("\r\n")[0]
+            m = re.search(r'WWW-Authenticate: *Digest[^\r\n]*realm="([^"]+)"[^\r\n]*nonce="([^"]+)"', r1, re.I)
+            b = re.search(r"WWW-Authenticate: *Basic", r1, re.I)
+            out["auth"] = "digest" if m else ("basic" if b else "geen")
+            if m:
+                realm, nonce = m.group(1), m.group(2)
+                h = lambda x: hashlib.md5(x.encode()).hexdigest()
+                resp = h(f"{h(f'{client.user}:{realm}:{client._pw}')}:{nonce}:{h(f'DESCRIBE:{uri}')}")
+                auth = (f'Authorization: Digest username="{client.user}", realm="{realm}", nonce="{nonce}", '
+                        f'uri="{uri}", response="{resp}"')
+                r2 = req(sock, 2, auth)
+                out["met_login"] = r2.split("\r\n")[0]
+    except Exception as e:  # noqa: BLE001  diagnose
+        out["fout"] = str(e)[:200]
+    return out
