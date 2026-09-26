@@ -491,3 +491,20 @@ async def test_code_moet_6_tot_8_cijfers(hass, devices):
         with pytest.raises(vol.Invalid):
             await call(hass, "add_code", {"name": "X", "code": bad, "doors": ["Cafe"]}, True)
     assert (await call(hass, "add_code", {"name": "X", "code": "12345678", "doors": ["Cafe"]}, True))["id"]
+
+
+async def test_deur_openen_op_afstand(hass, devices, hass_read_only_user):
+    cafe, kam = devices
+    await setup_two_entries(hass)
+    res = await call(hass, "open_door", {"door": "Kammerstraat"}, True)
+    assert res == {"door": "Kammerstraat", "opened": True}
+    assert getattr(kam, "opened", 0) == 1 and getattr(cafe, "opened", 0) == 0
+    a = reg(hass).audit[-1]
+    assert a["action"] == "deur geopend op afstand" and a["kind"] == "deur" and a["doors"] == ["Kammerstraat"]
+    kam.refuse_open = True
+    with pytest.raises(HomeAssistantError, match="geweigerd"):
+        await call(hass, "open_door", {"door": "Kammerstraat"}, True)
+    with pytest.raises(Unauthorized):
+        await hass.services.async_call(DOMAIN, "open_door", {"door": "Cafe"}, blocking=True,
+                                       context=Context(user_id=hass_read_only_user.id), return_response=True)
+    assert getattr(cafe, "opened", 0) == 0

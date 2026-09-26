@@ -93,6 +93,12 @@ class FakeClient:
         if self.dev.slow:
             time.sleep(self.dev.slow)
 
+    def open_door(self, channel=0, short_number="HA"):
+        self._need()
+        if getattr(self.dev, "refuse_open", False):
+            raise VTOError("deur openen geweigerd: {'code': 268959743}")
+        self.dev.opened = getattr(self.dev, "opened", 0) + 1
+
     def info(self):
         self._need()
         return {"type": "VTO4202", "version": "4.600", "serial": self.dev.host}

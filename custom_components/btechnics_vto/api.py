@@ -225,6 +225,24 @@ class VTOClient:
     def unlocks(self, count=200):
         return self.find(TABLE_LOG, count)
 
+    # ---------- deur openen ----------
+    def open_door(self, channel: int = 0, short_number: str = "HA"):
+        """Deur op afstand openen. Zelfde RPC als myhomeiot/DahuaVTO (dahua_vto.open_door):
+        accessControl.factory.instance {channel}, accessControl.openDoor {DoorIndex 0, ShortNumber},
+        daarna accessControl.destroy (het object hoort bij het toestel)."""
+        obj = self.call("accessControl.factory.instance", {"channel": int(channel)}).get("result")
+        if not obj:
+            raise VTOError("toestel gaf geen deurobject terug")
+        try:
+            r = self.call("accessControl.openDoor", {"DoorIndex": 0, "ShortNumber": short_number}, obj)
+        finally:
+            try:
+                self.call("accessControl.destroy", None, obj)
+            except Exception:  # noqa: BLE001  opruimen mag het resultaat niet verbergen
+                pass
+        if not r.get("result"):
+            raise VTOError(f"deur openen geweigerd: {r.get('error')}")
+
     # ---------- schrijven ----------
     # update_code en remove_code mogen ENKEL aangeroepen worden met een RecNo uit het
     # register van de integratie (codes die via de integratie zijn aangemaakt).

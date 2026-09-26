@@ -200,3 +200,14 @@ set_validity:
     valid_until:
       name: Geldig tot
       selector: { datetime: {} }
+
+open_door:
+  name: Deur openen
+  description: Opent een deur op afstand (enkel beheerders). Komt in het overzicht Wijzigingen met de naam van de gebruiker.
+  fields:
+    door:
+      name: Deur
+      description: Naam of id van de deur
+      required: true
+      example: "Cafe"
+      selector: { text: {} }
