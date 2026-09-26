@@ -900,7 +900,7 @@ class VtoCodes extends VtoBase {
     if (e.valid_from && e.valid_until) valid = `Geldig van ${when(e.valid_from)} tot ${when(e.valid_until)}.`;
     else if (e.valid_from) valid = `Geldig vanaf ${when(e.valid_from)}.`;
     else if (e.valid_until) valid = `Geldig tot ${when(e.valid_until)}.`;
-    return `Hallo ${e.name},\n\nJe toegangscode voor Trefpunt is ${e.secret}.\n${doors.length > 1 ? "Deuren" : "Deur"}: ${doorTxt}.\n${valid}\n\nTyp de code op het klavier van de deur. Hou de code voor jezelf.`;
+    return `Hallo ${e.name},\n\nJe toegangscode voor Trefpunt is ${e.secret}.\n${doors.length > 1 ? "Deuren" : "Deur"}: ${doorTxt}.\n${valid}\n\nZo open je de deur: typ op het klavier # ${e.secret} # (hekje, je code, hekje). Hou de code voor jezelf.`;
   }
   _openShare(e, note) {
     const p = this.shadowRoot.getElementById("panel");
