@@ -382,7 +382,7 @@ class VtoOverzicht extends VtoBase {
 /* ------------------------------------------------------------------------ toegang */
 
 const PERIODS = [
-  ["1", "Vandaag"], ["7", "7 dagen"], ["30", "30 dagen"], ["90", "90 dagen"], ["365", "1 jaar"], ["custom", "Eigen periode"],
+  ["1", "Vandaag"], ["7", "7 dagen"], ["30", "30 dagen"], ["90", "90 dagen"], ["365", "1 jaar"], ["custom", "Van … tot …"],
 ];
 const PAGE = 50;
 
@@ -1075,7 +1075,7 @@ class VtoCodes extends VtoBase {
     let saved = [];
     try { saved = JSON.parse(localStorage.getItem("btxvto_quick_doors") || "[]"); } catch (err) { saved = []; }
     const TYPES = [["Pakket", "24", 1], ["Technicus", "today", 0], ["Gast", "3d", 0], ["Andere", "24", 0]];
-    const DUR = [["1", "1 uur"], ["today", "Vandaag"], ["24", "24 uur"], ["3d", "3 dagen"], ["7d", "1 week"], ["custom", "Eigen"]];
+    const DUR = [["1", "1 uur"], ["today", "Vandaag"], ["24", "24 uur"], ["3d", "3 dagen"], ["7d", "1 week"], ["custom", "Van … tot …"]];
     const st = { type: "Pakket", dur: "24", once: true };
     const day = () => { const x = this._localInput(Date.now()); return `${Number(x.slice(8, 10))}/${Number(x.slice(5, 7))}`; };
     p.innerHTML = `<h3>Tijdelijke code</h3>
@@ -1084,7 +1084,7 @@ class VtoCodes extends VtoBase {
         <span class="muted">Bv. "Pakket bol" of "Technicus Fluvius". Komt in de historiek.</span></div>
       <div class="row">Deuren: ${doors.map((d) => `<label><input type="checkbox" class="qd" value="${esc(d.id)}" ${saved.includes(d.id) || (!saved.length && d === doors[0]) ? "checked" : ""}> ${esc(d.name)}</label>`).join("")}</div>
       <div class="row" id="qdur">Geldig: ${DUR.map(([k, l]) => `<button class="btn" data-qd="${k}">${l}</button>`).join("")}</div>
-      <div class="row" id="qcustom" style="display:none"><label>Vanaf <input id="vfrom" type="datetime-local"></label><label>Tot <input id="vuntil" type="datetime-local"></label></div>
+      <div class="row" id="qcustom" style="display:none"><label>Van <input id="vfrom" type="datetime-local"></label><label>Tot <input id="vuntil" type="datetime-local"></label><span class="muted">Belgische tijd (tijdzone van Home Assistant). Laat Van leeg om meteen te starten.</span></div>
       <div class="row"><label><input type="checkbox" id="qonce"> Eenmalig: na de eerste opening gaat de code vanzelf uit dienst</label></div>
       <div class="row muted" id="qsum"></div>
       <div class="row"><button class="btn primary" id="ok">Maak code en deel</button><button class="btn" id="cancel">Annuleren</button></div>`;
@@ -1109,12 +1109,23 @@ class VtoCodes extends VtoBase {
       $("qonce").checked = st.once;
       if (!nameTouched) $("qname").value = `${st.type} ${day()}`;
       const u = until();
-      $("qsum").textContent = u ? `Geldig tot ${this._fmt.dateTime.format(new Date(Date.parse(u + "Z") - this._tzOffset(u)))}${st.once ? ", eenmalig" : ""}. Home Assistant kiest een willekeurige code van 6 cijfers.` : "Kies een einde.";
+      const f = st.dur === "custom" && $("vfrom").value ? ($("vfrom").value.length === 16 ? $("vfrom").value + ":00" : $("vfrom").value) : "";
+      const toon = (x) => this._fmt.dateTime.format(new Date(this._localToMs(x)));
+      $("qsum").textContent = u ? `Geldig ${f ? `van ${toon(f)} ` : ""}tot ${toon(u)}${st.once ? ", eenmalig" : ""}. Home Assistant kiest een willekeurige code van 6 cijfers.` : "Kies tot wanneer de code geldig is.";
     };
     p.querySelectorAll("[data-qt]").forEach((b) => b.addEventListener("click", () => {
       const t = TYPES.find((x) => x[0] === b.dataset.qt); st.type = t[0]; st.dur = t[1]; st.once = !!t[2]; draw();
     }));
-    p.querySelectorAll("[data-qd]").forEach((b) => b.addEventListener("click", () => { st.dur = b.dataset.qd; draw(); }));
+    p.querySelectorAll("[data-qd]").forEach((b) => b.addEventListener("click", () => {
+      st.dur = b.dataset.qd;
+      // Van … tot …: velden voorinvullen (nu tot morgen dezelfde tijd), zodat je enkel aanpast wat moet
+      if (st.dur === "custom" && !$("vuntil").value) {
+        const nu = Math.ceil(Date.now() / 900000) * 900000;
+        $("vfrom").value = this._localInput(nu);
+        $("vuntil").value = this._localInput(nu + 24 * 3600000);
+      }
+      draw();
+    }));
     $("qonce").addEventListener("change", (ev) => { st.once = ev.target.checked; draw(); });
     ["vfrom", "vuntil"].forEach((id) => $(id).addEventListener("input", draw));
     $("ok").addEventListener("click", () => {
@@ -1144,9 +1155,21 @@ class VtoCodes extends VtoBase {
   }
   _tzOffset(localIso) {
     // verschil tussen de gegeven lokale tijd (tijdzone van Home Assistant) en UTC, in ms
-    const t = Date.parse(localIso + "Z");
-    const back = Date.parse(this._localInput(t) + ":00Z");
-    return back - t;
+    return Date.parse(localIso + "Z") - this._localToMs(localIso);
+  }
+  _localToMs(localIso) {
+    // lokale tijd (JJJJ-MM-DDTUU:MM[:SS], tijdzone van Home Assistant) naar een tijdstip in ms.
+    // Twee rondes zodat ook de dagen van de zomer- en wintertijd kloppen (laatste zondag van maart
+    // en oktober); bij het dubbele uur in oktober kiezen we het eerste, net als Home Assistant (fold=0).
+    const iso = localIso.length === 16 ? localIso + ":00" : localIso;
+    const alsUtc = Date.parse(iso + "Z");
+    const off = (t) => Date.parse(this._localInput(t) + ":00Z") - Math.floor(t / 60000) * 60000;
+    let t = alsUtc - off(alsUtc);
+    const o2 = off(t);
+    if (alsUtc - o2 !== t) { const t2 = alsUtc - o2; if (this._localInput(t2) === iso.slice(0, 16)) t = t2; }
+    const vroeger = t - 3600000;
+    if (this._localInput(vroeger) === iso.slice(0, 16)) t = vroeger;
+    return t;
   }
   _openShare(e, note) {
     const p = this.shadowRoot.getElementById("panel");
@@ -1417,7 +1440,7 @@ const HELP_DOC = {
   hint: "bv. tijdelijke code of badge",
   tasks: [
     { icon: "mdi:timer-outline", title: "Tijdelijke code geven", sub: "Pakket, technicus of gast", tab: "codes", tabName: "Codes en badges",
-      steps: ["Open <b>Codes en badges</b> en klik op <b>Tijdelijke code</b>.", "Kies <b>Pakket</b>, <b>Technicus</b>, <b>Gast</b> of <b>Andere</b>; pas de naam aan, bv. \"Pakket bol\".", "Vink de deur of deuren aan (je laatste keuze wordt onthouden).", "Kies hoe lang: 1 uur, Vandaag, 24 uur, 3 dagen, 1 week of Eigen.", "Laat <b>Eenmalig</b> aan voor een pakket: na de eerste opening vervalt de code.", "Klik op <b>Maak code en deel</b> en kies WhatsApp, Sms, Mail of Kopieer tekst."],
+      steps: ["Open <b>Codes en badges</b> en klik op <b>Tijdelijke code</b>.", "Kies <b>Pakket</b>, <b>Technicus</b>, <b>Gast</b> of <b>Andere</b>; pas de naam aan, bv. \"Pakket bol\".", "Vink de deur of deuren aan (je laatste keuze wordt onthouden).", "Kies hoe lang: 1 uur, Vandaag, 24 uur, 3 dagen, 1 week, of <b>Van … tot …</b> voor een eigen begin en einde (bv. vanaf de dag van de Gevelparade).", "Laat <b>Eenmalig</b> aan voor een pakket: na de eerste opening vervalt de code.", "Klik op <b>Maak code en deel</b> en kies WhatsApp, Sms, Mail of Kopieer tekst."],
       tip: "Home Assistant kiest zelf een willekeurige, vrije code van 6 cijfers. Na het einde gaat ze vanzelf uit dienst. Alle lopende tijdelijke codes vind je terug in de tab Tijdelijk." },
     { icon: "mdi:account-key", title: "Vaste code toevoegen", sub: "Voor een medewerker of vrijwilliger", tab: "codes", tabName: "Codes en badges",
       steps: ["Open <b>Codes en badges</b> en klik op <b>Nieuwe code</b>.", "Vul de naam en een code van 6 tot 8 cijfers in.", "Vink de deuren aan.", "Eventueel <b>Geldig vanaf</b> en <b>Geldig tot</b>; leeg = vanaf nu, zonder einde.", "Klik op <b>Opslaan</b> (10 tot 20 seconden) en deel de code in het venster dat opent."] },
@@ -1472,7 +1495,7 @@ class VtoHandleiding extends VtoBase {
 // exist"). Daarom registreren we opnieuw zolang het nodig is, telkens via window.customElements
 // (het register dat NU actief is) en met een nieuwe subklasse (een constructor mag maar een keer).
 const CARD_CLASSES = [["btechnics-vto-overzicht", VtoOverzicht], ["btechnics-vto-toegang", VtoToegang], ["btechnics-vto-codes", VtoCodes], ["btechnics-vto-handleiding", VtoHandleiding]];
-const CARDS_VERSION = "0.8.9";
+const CARDS_VERSION = "0.9.0";
 const define = (name, cls) => {
   if (window.customElements.get(name)) return;
   try {
