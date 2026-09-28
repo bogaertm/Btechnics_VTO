@@ -42,6 +42,11 @@ function formatters(tz) {
     date: { format: (d) => date(parts(d)) },
     time: { format: (d) => time(parts(d)) },
     short: { format: (d) => { const p = parts(d); return `${date(p)}, ${time(p)}`; } },
+    // zonder jaartal: "Ma 28 sep, 09u26"
+    noYear: { format: (d) => { const p = parts(d); return `${DAYS[p.wd]} ${p.day} ${MONTHS[p.month - 1]}, ${time(p)}`; } },
+    // kort voor smalle kolommen: vandaag enkel het uur, anders "27/9 18u49"
+    compact: { format: (d) => { const p = parts(d), n = parts(new Date());
+      return p.year === n.year && p.month === n.month && p.day === n.day ? time(p) : `${p.day}/${p.month} ${time(p)}`; } },
     // CSV: gewone notatie die Excel herkent
     csvDate: { format: (d) => { const p = parts(d); return `${two(p.day)}/${two(p.month)}/${p.year}`; } },
     csvTime: { format: (d) => { const p = parts(d); return `${two(p.hour)}:${two(p.minute)}:${two(p.second)}`; } },
@@ -59,6 +64,18 @@ async function photoSrc(hass, id) {
 }
 function isAdmin(hass) {
   return !!(hass && hass.user && hass.user.is_admin);
+}
+// icoon per methode (volledige tekst in de tooltip)
+function methodIcon(m) {
+  const t = String(m || "").toLowerCase();
+  const icon = t.startsWith("op afstand") ? "mdi:cellphone-link" : t.startsWith("binnenpost") ? "mdi:deskphone"
+    : t.startsWith("badge") ? "mdi:card-account-details-outline" : t.startsWith("vingerafdruk") ? "mdi:fingerprint"
+    : t.startsWith("gezicht") ? "mdi:face-recognition" : t.startsWith("exitknop") ? "mdi:gesture-tap-button"
+    : t.startsWith("code") || t.startsWith("ongeldige") ? "mdi:dialpad" : "mdi:help-circle-outline";
+  return `<ha-icon icon="${icon}" title="${esc(m)}" aria-label="${esc(m)}"></ha-icon>`;
+}
+function photoCell(hass, x, cap) {
+  return isAdmin(hass) ? `<td class="ph">${photoBtn(hass, x, cap)}</td>` : "";
 }
 function photoBtn(hass, x, cap) {
   if (!x.photo || !isAdmin(hass)) return "";
@@ -121,6 +138,7 @@ const BASE_CSS = `
   .scroll { overflow-x: auto; max-width: 100%; }
   button.photo { background: none; border: 0; padding: 0 2px; cursor: pointer; color: var(--secondary-text-color); --mdc-icon-size: 18px; vertical-align: middle; }
   button.photo:hover, button.photo:focus-visible { color: var(--primary-color); }
+  th.ph, td.ph { width: 32px; text-align: center; padding-left: 2px; padding-right: 2px; color: var(--secondary-text-color); --mdc-icon-size: 18px; }
   .lb { position: fixed; inset: 0; z-index: 10; background: rgba(0, 0, 0, 0.75); display: flex; align-items: center; justify-content: center; padding: 16px; }
   .lb figure { margin: 0; background: var(--card-background-color, #fff); border-radius: 12px; padding: 12px; max-width: min(920px, 100%);
     display: flex; flex-direction: column; gap: 8px; align-items: center; }
@@ -183,19 +201,24 @@ class VtoOverzicht extends VtoBase {
       .last { display: flex; gap: 12px; align-items: center; height: 88px; }
       .last .txt { flex: 1; min-width: 0; }
       .last .line { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; line-height: 1.35; }
+      .last .txt.full .line { white-space: normal; overflow: visible; }
+      .last .txt { cursor: default; }
       .pic { width: 104px; height: 64px; flex: none; border-radius: 8px; background: var(--secondary-background-color);
         display: flex; align-items: center; justify-content: center; color: var(--secondary-text-color); overflow: hidden; }
       .pic button.thumb, .pic button.thumb img { width: 104px; height: 64px; }
       .stat .l { min-height: 2.7em; line-height: 1.35; }
       table.recent { table-layout: fixed; width: 100%; }
       table.recent td { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; height: 22px; }
-      table.recent col.c1 { width: 33%; } table.recent col.c2 { width: 26%; } table.recent col.c3 { width: 12%; } table.recent col.c4 { width: 29%; }
-      table.recent button.photo { padding: 0 2px; min-height: 0; height: 20px; }
+      table.recent col.c1 { width: 5.6em; } table.recent col.c3 { width: 26px; } table.recent col.c4 { width: 26px; } table.recent col.c5 { width: 28px; }
+      table.recent td.c4 ha-icon { --mdc-icon-size: 18px; }
+      table.recent td.c4 .open { color: ${C_OPEN}; } table.recent td.c4 .refused { color: ${C_REFUSED}; }
+      table.recent td.c3, table.recent td.c4, table.recent td.ph { text-align: center; padding-left: 0; padding-right: 0; color: var(--secondary-text-color); --mdc-icon-size: 17px; }
+      table.recent tr[data-row] { cursor: pointer; }
+      table.recent tr.full td { white-space: normal; overflow: visible; height: auto; word-break: break-word; }
+      table.recent button.photo { padding: 0; min-height: 0; height: 22px; width: 24px; }
       @media (max-width: 480px) {
         .pic, .pic button.thumb, .pic button.thumb img { width: 72px; height: 48px; }
         .last { height: 80px; } .who.line { font-size: 1.05rem; }
-        table.recent col.c1 { width: 38%; } table.recent col.c2 { width: 30%; } table.recent col.c3 { width: 0; } table.recent col.c4 { width: 32%; }
-        table.recent td:nth-child(3) { padding: 0; font-size: 0; }
       }
       table.recent button.photo ha-icon { --mdc-icon-size: 16px; }
       .icon { width: 44px; height: 44px; border-radius: 50%; display: flex; align-items: center; justify-content: center; flex: none; }
@@ -262,6 +285,11 @@ class VtoOverzicht extends VtoBase {
     }
     body.innerHTML = `<div class="doors">${doors.map((d) => this._door(d, f)).join("")}</div>`;
     body.querySelectorAll("[data-open]").forEach((b) => b.addEventListener("click", () => this._open(b)));
+    // aanraken of klikken toont de volledige tekst (tooltip werkt niet op gsm)
+    body.querySelectorAll("tr[data-row], [data-txt]").forEach((el) => el.addEventListener("click", (e) => {
+      if (e.target.closest("[data-photo]")) return;
+      el.classList.toggle("full");
+    }));
     body.querySelectorAll("img[data-thumb]").forEach(async (img) => {
       try { img.src = await photoSrc(this._hass, img.dataset.thumb); } catch (e) { const bt = img.closest("button"); bt.outerHTML = '<ha-icon icon="mdi:camera-off-outline"></ha-icon>'; }
     });
@@ -280,13 +308,19 @@ class VtoOverzicht extends VtoBase {
     const how = !u ? "" : String(u.method).startsWith("op afstand") ? `${u.opened ? "Geopend" : "Geweigerd"} op afstand`
       : `${u.opened ? "Geopend" : "Geweigerd"} via ${u.method}`;
     const line1 = !d.available ? (u ? `Laatst gekend: ${how}` : "Geen verbinding met het toestel") : how;
-    const line2 = u ? f.dateTime.format(new Date(u.ts * 1000)) : "";
-    const recent = (d.recent || []).slice(0, 6).map((r) => `<tr>
-        <td class="muted">${f.dateTime.format(new Date(r.ts * 1000)).replace(/ \d{4},/, ",")}</td>
-        <td>${r.name === "?" ? '<span class="muted">onbekende code</span>' : isLabel(r.name) ? `<span class="muted">${esc(r.name)}</span>` : esc(r.name)}</td>
-        <td class="muted">${String(r.method).startsWith("op afstand") ? "afstand" : esc(r.method)}</td>
-        <td><span class="status"><span class="dot ${r.opened ? "open" : "refused"}"></span>${r.opened ? "Geopend" : "Geweigerd"}${photoBtn(this._hass, r, `${r.name === "?" ? "Onbekende code" : r.name}, ${d.name}, ${f.dateTime.format(new Date(r.ts * 1000))}`)}</span></td></tr>`).join("")
-      + '<tr><td colspan="4">&nbsp;</td></tr>'.repeat(Math.max(0, 6 - Math.min(6, (d.recent || []).length)));
+    const line2 = u ? f.noYear.format(new Date(u.ts * 1000)) : "";
+    const full = u ? `${who}\n${line1}\n${f.dateTime.format(new Date(u.ts * 1000))}` : who;
+    const admin = isAdmin(this._hass);
+    const recent = (d.recent || []).slice(0, 6).map((r) => { const when = new Date(r.ts * 1000);
+      const nm = r.name === "?" ? "Onbekende code" : r.name;
+      const meth = r.method;
+      return `<tr data-row title="${esc(`${nm}\n${f.dateTime.format(when)}\n${meth}\n${r.opened ? "Geopend" : "Geweigerd"}`)}">
+        <td class="muted c1">${esc(f.compact.format(when))}</td>
+        <td class="c2">${r.name === "?" || isLabel(r.name) ? `<span class="muted">${esc(nm)}</span>` : esc(nm)}</td>
+        <td class="c3">${methodIcon(meth)}</td>
+        <td class="c4"><ha-icon class="${r.opened ? "open" : "refused"}" icon="${r.opened ? "mdi:check-circle" : "mdi:close-circle"}" title="${r.opened ? "Geopend" : "Geweigerd"}" aria-label="${r.opened ? "Geopend" : "Geweigerd"}"></ha-icon></td>
+        ${admin ? `<td class="ph">${photoBtn(this._hass, r, `${nm}, ${d.name}, ${f.dateTime.format(when)}`)}</td>` : ""}</tr>`; }).join("")
+      + `<tr><td colspan="${admin ? 5 : 4}">&nbsp;</td></tr>`.repeat(Math.max(0, 6 - Math.min(6, (d.recent || []).length)));
     const thumb = `<div class="pic">${u && u.photo && isAdmin(this._hass)
       ? `<button class="thumb" data-photo="${esc(u.photo)}" data-cap="${esc(`${who}, ${d.name}, ${f.dateTime.format(new Date(u.ts * 1000))}`)}" title="Foto bekijken"><img data-thumb="${esc(u.photo)}" alt="Foto van de laatste toegang"></button>`
       : `<ha-icon icon="mdi:camera-off-outline" title="Geen foto"></ha-icon>`}</div>`;
@@ -294,7 +328,7 @@ class VtoOverzicht extends VtoBase {
       <div class="head"><span class="name">${esc(d.name)}</span>
         <span class="chip ${d.available ? "" : "off"}">${d.available ? "Online" : "Offline"}</span></div>
       <div class="last"><div class="icon ${cls}"><ha-icon icon="${icon}"></ha-icon></div>
-        <div class="txt"><div class="who line">${esc(who)}</div><div class="muted line">${esc(line1)}</div><div class="muted line">${esc(line2) || "&nbsp;"}</div></div>${thumb}</div>
+        <div class="txt" data-txt title="${esc(full)}"><div class="who line">${esc(who)}</div><div class="muted line">${esc(line1)}</div><div class="muted line">${esc(line2) || "&nbsp;"}</div></div>${thumb}</div>
       <div class="stats">
         <div class="stat"><div class="v">${d.today.opened}</div><div class="l">Vandaag geopend</div></div>
         <div class="stat"><div class="v">${d.today.refused}</div><div class="l">Vandaag geweigerd</div></div>
@@ -303,7 +337,7 @@ class VtoOverzicht extends VtoBase {
       </div>
       ${isAdmin(this._hass) ? `<div class="opener"><button class="btn" data-open="${esc(d.id)}" data-name="${esc(d.name)}" ${d.available ? "" : "disabled"}>
         <ha-icon icon="mdi:door-open" style="--mdc-icon-size:18px"></ha-icon> Deur openen</button><span class="omsg" data-omsg="${esc(d.id)}"></span></div>` : ""}
-      <table class="recent"><colgroup><col class="c1"><col class="c2"><col class="c3"><col class="c4"></colgroup>${recent}</table>
+      <table class="recent"><colgroup><col class="c1"><col class="c2"><col class="c3"><col class="c4">${admin ? '<col class="c5">' : ""}</colgroup>${recent}</table>
     </div>`;
   }
   async _open(b) {
@@ -631,12 +665,13 @@ class VtoToegang extends VtoBase {
       return;
     }
     if (!r.rows.length) { out.innerHTML = `<div class="empty">Geen toegangen gevonden</div>`; return; }
-    out.innerHTML = `<table><thead><tr><th>Datum</th><th>Tijd</th><th>Deur</th><th>Persoon</th><th>Methode</th><th>Status</th></tr></thead><tbody>
+    const phHead = isAdmin(this._hass) ? '<th class="ph" title="Foto"><ha-icon icon="mdi:camera-outline"></ha-icon></th>' : "";
+    out.innerHTML = `<table><thead><tr><th>Datum</th><th>Tijd</th><th>Deur</th><th>Persoon</th><th>Methode</th><th>Status</th>${phHead}</tr></thead><tbody>
       ${r.rows.map((x) => { const d = new Date(x.ts * 1000); return `<tr>
         <td class="when">${f.date.format(d)}</td><td class="when">${f.time.format(d)}</td><td>${esc(x.door)}</td>
         <td>${x.name === "?" ? '<button class="link muted" data-person="?">onbekende code</button>' : `<button class="link${isLabel(x.name) ? " muted" : ""}" data-person="${esc(x.name)}">${esc(x.name)}</button>`}</td>
         <td class="muted">${esc(x.method)}${x.card ? ` <span class="mono">${esc(x.card)}</span>` : ""}</td>
-        <td><span class="status"><span class="dot ${x.opened ? "open" : "refused"}"></span>${x.opened ? "Geopend" : "Geweigerd"}${photoBtn(this._hass, x, `${x.name === "?" ? "Onbekende code" : x.name}, ${x.door}, ${f.dateTime.format(d)}`)}</span></td></tr>`; }).join("")}
+        <td><span class="status"><span class="dot ${x.opened ? "open" : "refused"}"></span>${x.opened ? "Geopend" : "Geweigerd"}</span></td>${photoCell(this._hass, x, `${x.name === "?" ? "Onbekende code" : x.name}, ${x.door}, ${f.dateTime.format(d)}`)}</tr>`; }).join("")}
       </tbody></table>`;
     if (r.rows.length < r.total) {
       more.innerHTML = `<button class="btn" id="morebtn">Meer tonen (${r.rows.length} van ${r.total.toLocaleString("nl-BE")})</button>`;
@@ -839,9 +874,9 @@ class VtoCodes extends VtoBase {
       el.innerHTML = `<div class="head"><h3>Geschiedenis: ${esc(name)}</h3><button class="btn" id="hclose">Sluiten</button></div>
         <div class="kpis"><span><b>${r.total.toLocaleString("nl-BE")}</b> toegangen (laatste jaar)</span><span><b>${r.opened.toLocaleString("nl-BE")}</b> geopend</span>
           <span><b>${r.refused.toLocaleString("nl-BE")}</b> geweigerd</span>${last ? `<span>Laatst: <b>${esc(f.dateTime.format(new Date(last.ts * 1000)))}</b></span>` : ""}</div>
-        ${r.rows.length ? `<div class="scroll"><table><thead><tr><th>Wanneer</th><th>Deur</th><th>Hoe</th><th>Status</th></tr></thead><tbody>
+        ${r.rows.length ? `<div class="scroll"><table><thead><tr><th>Wanneer</th><th>Deur</th><th>Hoe</th><th>Status</th>${isAdmin(this._hass) ? '<th class="ph" title="Foto"><ha-icon icon="mdi:camera-outline"></ha-icon></th>' : ""}</tr></thead><tbody>
           ${r.rows.map((x) => `<tr><td class="when">${esc(f.dateTime.format(new Date(x.ts * 1000)))}</td><td>${esc(x.door)}</td><td class="muted">${esc(x.method)}</td>
-            <td><span class="status"><span class="dot ${x.opened ? "open" : "refused"}"></span>${x.opened ? "Geopend" : "Geweigerd"}${photoBtn(this._hass, x, `${name}, ${x.door}, ${f.dateTime.format(new Date(x.ts * 1000))}`)}</span></td></tr>`).join("")}
+            <td><span class="status"><span class="dot ${x.opened ? "open" : "refused"}"></span>${x.opened ? "Geopend" : "Geweigerd"}</span></td>${photoCell(this._hass, x, `${name}, ${x.door}, ${f.dateTime.format(new Date(x.ts * 1000))}`)}</tr>`).join("")}
           </tbody></table></div>` : `<div class="empty">Geen toegangen in het laatste jaar.</div>`}
         ${r.rows.length < r.total ? `<div class="more"><button class="btn" id="hmore">Meer tonen (${r.rows.length} van ${r.total.toLocaleString("nl-BE")})</button></div>` : ""}`;
       el.querySelector("#hclose").addEventListener("click", () => this._closeHistory());
@@ -1339,10 +1374,10 @@ const HELP_DOC = {
       steps: ["Open <b>Overzicht</b>.", "Klik bij de juiste deur op <b>Deur openen</b>.", "De knop wordt rood: klik binnen 6 seconden nog eens.", "\"... is geopend.\" verschijnt. In de historiek staat Op afstand met je naam."],
       tip: "Enkel voor beheerders. Elke opening op afstand staat bij Wijzigingen." },
     { icon: "mdi:history", title: "Nagaan wie binnenkwam", sub: "Zoeken, per persoon, CSV", tab: "historiek", tabName: "Historiek",
-      steps: ["Open <b>Historiek</b>.", "Zoek op naam of kies een deur, geopend of geweigerd, en een periode.", "Klik op <b>Per persoon</b> voor een overzicht per persoon; klik op een naam om te filteren.", "Camera-icoon = foto van die toegang. <b>CSV</b> geeft alles voor Excel."] },
+      steps: ["Open <b>Historiek</b>.", "Zoek op naam of kies een deur, geopend of geweigerd, en een periode.", "Klik op <b>Per persoon</b> voor een overzicht per persoon; klik op een naam om te filteren.", "Het camera-icoon in de laatste kolom opent de foto van die toegang. <b>CSV</b> geeft alles voor Excel."] },
   ],
   topics: [
-    { title: "Overzicht", sub: "Status per deur, laatste toegang, deur openen", html: hpTable([["Kaart per deur", "Online of Offline, laatste toegang (wie, hoe, wanneer) met foto, aantallen van vandaag, codes en badges"], ["Deur openen", "Enkel beheerders, met bevestiging"], ["Recente toegangen", "De laatste 6 van die deur"]]) },
+    { title: "Overzicht", sub: "Status per deur, laatste toegang, deur openen", html: hpTable([["Kaart per deur", "Online of Offline, laatste toegang (wie, hoe, wanneer) met foto, aantallen van vandaag, codes en badges"], ["Deur openen", "Enkel beheerders, met bevestiging"], ["Recente toegangen", "De laatste 6 van die deur: tijd (vandaag enkel het uur), naam, icoon voor de methode, vinkje geopend of kruisje geweigerd, camera voor de foto. Ga met de muis over een rij voor alle details, of tik op de rij om de volledige naam te zien"]]) },
     { title: "Historiek", sub: "Toegangen van het laatste jaar", html: `<p>Filters: zoeken, deur, status, periode (vandaag tot 1 jaar of eigen). Weergave Toegangen of Per persoon. CSV voor Excel.</p>` + hpTable([["Binnenpost 9901, 9902, 9903", "Geopend via die binnenpost"], ["Op afstand", "Geopend met Deur openen; bij Hoe staat wie"], ["Foute code", "Een code die niet bestaat of niet geldig is voor die deur"], ["Onbekende badge", "Een badge die niet gekend is"], ["Ongeldige invoer", "Onvolledige invoer op het klavier"], ["Exitknop", "Geopend met de knop binnen"]]) },
     { title: "Codes en badges", sub: "Statussen en knoppen", html: hpTable([["Actief", "Staat op de toestellen en werkt"], ["Tijdelijk (tab)", "Alle codes met een geldigheid of eenmalig gebruik die nog niet uit dienst zijn, ook de wachtende"], ["Wacht op begin", "Geldigheid begint later; komt er vanzelf op (of Nu al activeren)"], ["Geblokkeerd", "Tijdelijk van de toestellen, tot een tijdstip of tot deblokkeren"], ["Uit dienst", "Van de toestellen, bewaard en herstelbaar"], ["Eenmalig", "Vervalt na de eerste opening"], ["Wijzigingen", "Onderaan: wie wat wanneer deed, ook de planner en openen op afstand"]]) },
     { title: "Aan de deur", sub: "Hoe open je", html: hpTable([["Code", "Typ <b># code #</b> op het klavier"], ["Badge", "Hou de badge tegen de lezer"], ["Binnenpost", "Opentoets op de binnenpost"]]) },
@@ -1377,7 +1412,7 @@ class VtoHandleiding extends VtoBase {
 // exist"). Daarom registreren we opnieuw zolang het nodig is, telkens via window.customElements
 // (het register dat NU actief is) en met een nieuwe subklasse (een constructor mag maar een keer).
 const CARD_CLASSES = [["btechnics-vto-overzicht", VtoOverzicht], ["btechnics-vto-toegang", VtoToegang], ["btechnics-vto-codes", VtoCodes], ["btechnics-vto-handleiding", VtoHandleiding]];
-const CARDS_VERSION = "0.8.3";
+const CARDS_VERSION = "0.8.4";
 const define = (name, cls) => {
   if (window.customElements.get(name)) return;
   try {
