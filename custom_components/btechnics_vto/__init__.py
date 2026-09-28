@@ -954,6 +954,31 @@ def _register_services(hass: HomeAssistant):
 
     async_register_admin_service(hass, DOMAIN, "camera_probe", camera_probe, supports_response=SupportsResponse.ONLY)
 
+    READ_CONFIG_DEFAULT = ["VTOBasicInfo", "AccessControlGeneral", "AccessControl", "CommGlobal", "Intercom",
+                           "VideoTalkPhoneGeneral", "VideoTalkPhoneBasic", "KeyBoard", "Keyboard", "KeyboardSetting",
+                           "Keypad", "ExternalModule", "ModuleInfo", "ScreenSaver", "Display", "DisplaySetting",
+                           "ScreenLight", "Lighting", "LightingSchedule", "FillLight", "PowerSave", "Standby",
+                           "ButtonSetting", "Sound", "AudioOutputVolume", "Locales"]
+
+    async def read_config(call: ServiceCall):
+        """Alleen lezen: configuratie van de toestellen naast elkaar (diagnose)."""
+        names = call.data.get("names") or READ_CONFIG_DEFAULT
+        want = (call.data.get("door") or "").strip().lower()
+        out = []
+        for c in sorted(_all_coords(hass).values(), key=lambda c: c.door_name.lower()):
+            if want and want not in (c.door_name.lower(), c.door_id.lower()):
+                continue
+            try:
+                res = await hass.async_add_executor_job(c._run, lambda c=c: c.client.read_configs(names))
+            except Exception as e:  # noqa: BLE001  diagnose
+                res = {"fout": str(e)[:200]}
+            out.append({"deur": c.door_name, **res})
+        return {"toestellen": out}
+
+    async_register_admin_service(hass, DOMAIN, "read_config", read_config, vol.Schema({
+        vol.Optional("door"): cv.string, vol.Optional("names"): vol.All(cv.ensure_list, [cv.string])}),
+        supports_response=SupportsResponse.ONLY)
+
     ID_SCHEMA = vol.Schema({vol.Required("id"): cv.string})
     async_register_admin_service(hass, DOMAIN, "block", block, vol.Schema({
         vol.Required("id"): cv.string, vol.Optional("until"): cv.datetime}), supports_response=SupportsResponse.OPTIONAL)

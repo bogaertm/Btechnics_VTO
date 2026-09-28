@@ -186,6 +186,22 @@ camera_probe:
   name: Camera testen
   description: Diagnose. Kijkt per toestel of een foto nemen lukt en of toegangen meteen gemeld worden. Bewaart geen beelden.
 
+read_config:
+  name: Instellingen lezen
+  description: Diagnose. Leest configuratietabellen van de toestellen (alleen lezen), bv. om het klavier van twee deuren te vergelijken.
+  fields:
+    door:
+      name: Deur
+      description: Naam of id van de deur; leeg = alle deuren
+      selector:
+        text:
+    names:
+      name: Tabellen
+      description: Namen van configuratietabellen; leeg = lijst voor klavier en stand-by
+      selector:
+        text:
+          multiple: true
+
 set_validity:
   name: Geldigheid instellen
   description: >-

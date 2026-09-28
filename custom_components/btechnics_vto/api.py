@@ -163,6 +163,18 @@ class VTOClient:
             out[name] = json.dumps(r.get("params"))[:300] if r.get("result") else f"geen: {r.get('error')}"
         return out
 
+    def read_configs(self, names) -> dict:
+        """Alleen lezen: configuratietabellen opvragen (diagnose, bv. klavier en stand-by)."""
+        out = {"toestel": self.info()}
+        for name in names:
+            try:
+                r = self.call("configManager.getConfig", {"name": name})
+            except Exception as e:  # noqa: BLE001  diagnose
+                out[name] = f"fout: {str(e)[:120]}"
+                continue
+            out[name] = r.get("params") if r.get("result") else f"geen: {r.get('error')}"
+        return out
+
     # ---------- lezen ----------
     def info(self):
         t = (self.call("magicBox.getDeviceType").get("params") or {}).get("type")
