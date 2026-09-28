@@ -172,7 +172,8 @@ class VtoBase extends HTMLElement {
   set hass(hass) {
     const first = !this._hass;
     this._hass = hass;
-    this._fmt = this._fmt || formatters(hass.config && hass.config.time_zone);
+    // na een scriptwissel kan _fmt nog van de oude versie zijn (zonder de nieuwe notaties)
+    if (!this._fmt || !this._fmt.longDate) this._fmt = formatters(hass.config && hass.config.time_zone);
     if (first) this._init();
     else this._hassChanged();
   }
@@ -1471,7 +1472,7 @@ class VtoHandleiding extends VtoBase {
 // exist"). Daarom registreren we opnieuw zolang het nodig is, telkens via window.customElements
 // (het register dat NU actief is) en met een nieuwe subklasse (een constructor mag maar een keer).
 const CARD_CLASSES = [["btechnics-vto-overzicht", VtoOverzicht], ["btechnics-vto-toegang", VtoToegang], ["btechnics-vto-codes", VtoCodes], ["btechnics-vto-handleiding", VtoHandleiding]];
-const CARDS_VERSION = "0.8.6";
+const CARDS_VERSION = "0.8.7";
 const define = (name, cls) => {
   if (window.customElements.get(name)) return;
   try {
@@ -1487,6 +1488,7 @@ const reinit = (tag) => {
   const walk = (root) => {
     for (const el of root.querySelectorAll("*")) {
       if (el.tagName === tag && el._hass) {
+        el._fmt = formatters(el._hass.config && el._hass.config.time_zone);
         clearInterval(el._timer);
         el._timer = null;
         try { el._init(); } catch (e) { /* volgende kaart */ }
@@ -1496,20 +1498,40 @@ const reinit = (tag) => {
   };
   walk(document);
 };
-const upgrade = (name, cls) => {
-  const R = window.customElements.get(name);
-  if (!R || R.__btxVto === CARDS_VERSION || R.prototype instanceof cls) return;
+const olderThanMe = (ver) => {
   // enkel naar een nieuwere versie (twee scriptversies mogen elkaar niet om beurten vervangen)
+  if (!ver) return true;
   const v = (x) => String(x || "0").split(".").map(Number);
-  const [a, b] = [v(CARDS_VERSION), v(R.__btxVto)];
-  const newer = a.findIndex((n, i) => n !== (b[i] || 0));
-  if (R.__btxVto && (newer < 0 || a[newer] < (b[newer] || 0))) return;
-  try {
-    Object.setPrototypeOf(R.prototype, cls.prototype);
-    Object.setPrototypeOf(R, cls);
-    R.__btxVto = CARDS_VERSION;
-    reinit(name.toUpperCase());
-  } catch (e) { /* laat de oude versie staan */ }
+  const [a, b] = [v(CARDS_VERSION), v(ver)];
+  const i = a.findIndex((n, k) => n !== (b[k] || 0));
+  return i >= 0 && a[i] > (b[i] || 0);
+};
+const liveClasses = (tag) => {
+  // de klassen van de kaarten die echt op de pagina staan: met een scoped registry (HA frontend) is dat
+  // niet altijd de klasse die customElements.get teruggeeft (vastgesteld 28/09/2026: v0.8.5 bleef staan)
+  const out = new Set();
+  const walk = (root) => {
+    for (const el of root.querySelectorAll("*")) {
+      if (el.tagName === tag) out.add(el.constructor);
+      if (el.shadowRoot) walk(el.shadowRoot);
+    }
+  };
+  walk(document);
+  return out;
+};
+const upgrade = (name, cls) => {
+  const cands = new Set([window.customElements.get(name), ...liveClasses(name.toUpperCase())]);
+  let changed = false;
+  for (const R of cands) {
+    if (!R || !R.prototype || R.prototype instanceof cls || !olderThanMe(R.__btxVto)) continue;
+    try {
+      Object.setPrototypeOf(R.prototype, cls.prototype);
+      Object.setPrototypeOf(R, cls);
+      R.__btxVto = CARDS_VERSION;
+      changed = true;
+    } catch (e) { /* laat de oude versie staan */ }
+  }
+  if (changed) reinit(name.toUpperCase());
 };
 const registerAll = () => { for (const [name, cls] of CARD_CLASSES) { define(name, cls); upgrade(name, cls); } };
 registerAll();
