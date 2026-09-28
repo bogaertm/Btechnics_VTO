@@ -22,6 +22,8 @@ function errText(e) {
 }
 
 const DAYS = ["Zo", "Ma", "Di", "Wo", "Do", "Vr", "Za"];
+const DAYS_LONG = ["zondag", "maandag", "dinsdag", "woensdag", "donderdag", "vrijdag", "zaterdag"];
+const MONTHS_LONG = ["januari", "februari", "maart", "april", "mei", "juni", "juli", "augustus", "september", "oktober", "november", "december"];
 
 // Datums als "Za 13 sep 2026" en uren als "23u14", altijd in de tijdzone van Home Assistant.
 function formatters(tz) {
@@ -40,6 +42,8 @@ function formatters(tz) {
   return {
     dateTime: { format: (d) => { const p = parts(d); return `${date(p)}, ${time(p)}`; } },
     date: { format: (d) => date(parts(d)) },
+    // voluit, voor berichten: "maandag 28 september 2026"
+    longDate: { format: (d) => { const p = parts(d); return `${DAYS_LONG[p.wd]} ${p.day} ${MONTHS_LONG[p.month - 1]} ${p.year}`; } },
     time: { format: (d) => time(parts(d)) },
     short: { format: (d) => { const p = parts(d); return `${date(p)}, ${time(p)}`; } },
     // zonder jaartal: "Ma 28 sep, 09u26"
@@ -1045,9 +1049,14 @@ class VtoCodes extends VtoBase {
     const f = this._fmt;
     const doors = (e.doors.length ? e.doors : e.stored).map((d) => d.name);
     const doorTxt = doors.length > 1 ? `${doors.slice(0, -1).join(", ")} en ${doors[doors.length - 1]}` : doors.join("");
-    const when = (iso) => f.dateTime.format(new Date(iso)).replace(", ", " om ");
+    // deeltekst in lopende taal: "maandag 28 september 2026, 23u59" (geen "om", dag voluit en klein)
+    const day = (iso) => f.longDate.format(new Date(iso));
+    const hour = (iso) => f.time.format(new Date(iso));
+    const when = (iso) => `${day(iso)}, ${hour(iso)}`;
     let valid = "Geldig vanaf nu, zonder einddatum.";
-    if (e.valid_from && e.valid_until) valid = `Geldig van ${when(e.valid_from)} tot ${when(e.valid_until)}.`;
+    if (e.valid_from && e.valid_until) valid = day(e.valid_from) === day(e.valid_until)
+      ? `Geldig op ${day(e.valid_from)}, van ${hour(e.valid_from)} tot ${hour(e.valid_until)}.`
+      : `Geldig van ${when(e.valid_from)} tot ${when(e.valid_until)}.`;
     else if (e.valid_from) valid = `Geldig vanaf ${when(e.valid_from)}.`;
     else if (e.valid_until) valid = `Geldig tot ${when(e.valid_until)}.`;
     if (e.max_uses) valid += e.max_uses === 1 ? " De code werkt maar een keer." : ` De code werkt maximaal ${e.max_uses} keer.`;
@@ -1462,7 +1471,7 @@ class VtoHandleiding extends VtoBase {
 // exist"). Daarom registreren we opnieuw zolang het nodig is, telkens via window.customElements
 // (het register dat NU actief is) en met een nieuwe subklasse (een constructor mag maar een keer).
 const CARD_CLASSES = [["btechnics-vto-overzicht", VtoOverzicht], ["btechnics-vto-toegang", VtoToegang], ["btechnics-vto-codes", VtoCodes], ["btechnics-vto-handleiding", VtoHandleiding]];
-const CARDS_VERSION = "0.8.5";
+const CARDS_VERSION = "0.8.6";
 const define = (name, cls) => {
   if (window.customElements.get(name)) return;
   try {
