@@ -123,6 +123,7 @@ const BASE_CSS = `
   td { padding: 8px; border-bottom: 1px solid var(--divider-color); vertical-align: top; }
   tr:last-child td { border-bottom: none; }
   td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+  .refusedtxt { color: var(--error-color, #db4437); font-weight: 500; }
   .mono { font-family: var(--code-font-family, ui-monospace, Menlo, Consolas, monospace); }
   .link { color: var(--primary-color); cursor: pointer; background: none; border: none; padding: 0; font: inherit; text-align: left; }
   .link:hover { text-decoration: underline; }
@@ -389,7 +390,7 @@ class VtoToegang extends VtoBase {
     const c = this._config;
     this._state = {
       search: "", person: null, door: "", status: "all",
-      period: String(c.period || "365"), from: "", to: "", view: "list", offset: 0,
+      period: String(c.period || "365"), from: "", to: "", view: "list", offset: 0, day: null,
     };
     this.shadowRoot.innerHTML = `<style>${BASE_CSS}
       .filters { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 12px; }
@@ -422,6 +423,7 @@ class VtoToegang extends VtoBase {
       <div class="filters">
         <input id="q" type="search" list="names" placeholder="Zoek persoon of badgenummer" autocomplete="off">
         <datalist id="names"></datalist>
+        <span id="dchip" class="personchip"><span id="dname"></span><button id="dclear" title="Dagfilter wissen"><ha-icon icon="mdi:close" style="--mdc-icon-size:18px"></ha-icon></button></span>
         <span id="pchip" class="personchip"><span id="pname"></span><button id="pclear" title="Persoonfilter wissen"><ha-icon icon="mdi:close" style="--mdc-icon-size:18px"></ha-icon></button></span>
         <select id="door"><option value="">Alle deuren</option></select>
         <select id="status"><option value="all">Alle</option><option value="opened">Geopend</option><option value="refused">Geweigerd</option></select>
@@ -434,6 +436,7 @@ class VtoToegang extends VtoBase {
       <div class="tabs">
         <button id="tlist" class="btn active">Toegangen</button>
         <button id="tpeople" class="btn">Per persoon</button>
+        <button id="tdays" class="btn">Per dag</button>
       </div>
       <div id="out" class="scroll"><div class="muted">Laden...</div></div>
       <div id="more" class="more"></div>
@@ -464,10 +467,14 @@ class VtoToegang extends VtoBase {
     $("to").addEventListener("change", (e) => { this._state.to = e.target.value; this._reload(); });
     $("tlist").addEventListener("click", () => this._setView("list"));
     $("tpeople").addEventListener("click", () => this._setView("people"));
+    $("tdays").addEventListener("click", () => this._setView("days"));
+    $("dclear").addEventListener("click", () => this._setDay(null));
     $("csv").addEventListener("click", () => this._csv());
     this.shadowRoot.addEventListener("click", (e) => {
       const b = e.target.closest("[data-person]");
       if (b) this._setPerson(b.dataset.person);
+      const dd = e.target.closest("[data-day]");
+      if (dd) this._setDay(dd.dataset.day);
     });
     this._loadDoors();
     this._reload();
@@ -500,6 +507,16 @@ class VtoToegang extends VtoBase {
     if (p) { $("q").value = ""; this._state.search = ""; this._state.view = "list"; this._syncTabs(); }
     this._reload();
   }
+  _setDay(d) {
+    // een dag uit Per dag: enkel de toegangen van die dag tonen (periodekeuze blijft bewaard)
+    this._state.day = d;
+    const $ = (id) => this.shadowRoot.getElementById(id);
+    $("dchip").classList.toggle("on", !!d);
+    $("dname").textContent = d ? `Dag: ${this._fmt.date.format(new Date(`${d}T12:00:00Z`))}` : "";
+    $("period").disabled = !!d;
+    if (d) { this._state.view = "list"; this._syncTabs(); }
+    this._reload();
+  }
   _setView(v) {
     this._state.view = v;
     this._syncTabs();
@@ -508,6 +525,7 @@ class VtoToegang extends VtoBase {
   _syncTabs() {
     this.shadowRoot.getElementById("tlist").classList.toggle("active", this._state.view === "list");
     this.shadowRoot.getElementById("tpeople").classList.toggle("active", this._state.view === "people");
+    this.shadowRoot.getElementById("tdays").classList.toggle("active", this._state.view === "days");
   }
   _filters() {
     const s = this._state;
@@ -516,7 +534,10 @@ class VtoToegang extends VtoBase {
     if (s.search) m.search = s.search;
     if (s.person !== null) m.person = s.person;
     if (s.status !== "all") m.status = s.status;
-    if (s.period === "custom") {
+    if (s.day) {
+      m.date_from = s.day;
+      m.date_to = s.day;
+    } else if (s.period === "custom") {
       if (s.from) m.date_from = s.from;
       if (s.to) m.date_to = s.to;
     } else {
@@ -654,6 +675,18 @@ class VtoToegang extends VtoBase {
     const out = this.shadowRoot.getElementById("out");
     const more = this.shadowRoot.getElementById("more");
     more.innerHTML = "";
+    if (this._state.view === "days") {
+      const days = r.days || [];
+      if (!days.length) { out.innerHTML = `<div class="empty">Geen toegangen gevonden</div>`; return; }
+      out.innerHTML = `<table><thead><tr><th>Dag</th><th class="num">Toegangen</th><th class="num">Geopend</th><th class="num">Geweigerd</th><th class="num">Personen</th><th>Eerste</th><th>Laatste</th><th>Per deur</th></tr></thead><tbody>
+        ${days.map((d) => `<tr>
+          <td class="when"><button class="link" data-day="${esc(d.day)}" title="Toegangen van deze dag tonen">${esc(f.date.format(new Date(`${d.day}T12:00:00Z`)))}</button></td>
+          <td class="num">${d.count}</td><td class="num">${d.opened}</td><td class="num">${d.refused ? `<span class="refusedtxt">${d.refused}</span>` : 0}</td><td class="num">${d.people}</td>
+          <td class="when">${f.time.format(new Date(d.first * 1000))}</td><td class="when">${f.time.format(new Date(d.last * 1000))}</td>
+          <td class="muted">${d.doors.map((x) => `${esc(x.door)} ${x.count}`).join(", ")}</td></tr>`).join("")}
+        </tbody></table>`;
+      return;
+    }
     if (this._state.view === "people") {
       if (!r.people.length) { out.innerHTML = `<div class="empty">Geen toegangen gevonden</div>`; return; }
       out.innerHTML = `<table><thead><tr><th>Persoon</th><th class="num">Toegangen</th><th class="num">Geopend</th><th class="num">Geweigerd</th><th>Laatst</th><th>Deuren</th></tr></thead><tbody>
@@ -733,8 +766,9 @@ class VtoToegang extends VtoBase {
 class VtoCodes extends VtoBase {
   _init() {
     this._show = false;
+    this._revealed = new Set(); // codes die met een klik zichtbaar gemaakt zijn
     this._q = "";
-    this._status = "active";
+    this._status = "all";
     this._kind = "all";
     this._form = null;      // { type, entry }
     this._auditAll = false;
@@ -743,6 +777,11 @@ class VtoCodes extends VtoBase {
       .bar input[type=search] { flex: 1 1 220px; min-width: 180px; }
       .tabs { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 12px; }
       .hidden { letter-spacing: 2px; color: var(--secondary-text-color); }
+      button.reveal { background: none; border: 0; padding: 2px 4px; margin: -2px -4px; border-radius: 6px; cursor: pointer; font: inherit; color: inherit;
+        display: inline-flex; align-items: center; gap: 6px; --mdc-icon-size: 16px; }
+      button.reveal ha-icon { color: var(--secondary-text-color); opacity: 0.6; }
+      button.reveal:hover { background: var(--secondary-background-color); }
+      button.reveal:hover ha-icon { opacity: 1; }
       .chip { display: inline-flex; align-items: center; gap: 4px; font-size: 0.8rem; padding: 2px 8px; border-radius: 12px;
         background: var(--secondary-background-color); margin: 0 4px 4px 0; white-space: nowrap; }
       .chip.stored { color: var(--secondary-text-color); border: 1px dashed var(--divider-color); background: none; }
@@ -812,6 +851,7 @@ class VtoCodes extends VtoBase {
     $("kind").addEventListener("change", (e) => { this._kind = e.target.value; this._render(); });
     $("toggle").addEventListener("click", () => {
       this._show = !this._show;
+      this._revealed.clear();
       $("toggle").innerHTML = `<ha-icon icon="${this._show ? "mdi:eye-off" : "mdi:eye"}" style="--mdc-icon-size:18px"></ha-icon> ${this._show ? "Codes verbergen" : "Codes tonen"}`;
       this._render();
     });
@@ -821,6 +861,13 @@ class VtoCodes extends VtoBase {
     this.shadowRoot.addEventListener("click", (e) => {
       const h = e.target.closest("[data-hist]");
       if (h) return this._history(h.dataset.hist);
+      const rv = e.target.closest("[data-reveal]");
+      if (rv) {
+        // klik op een code: enkel die code tonen of weer verbergen
+        const id = rv.dataset.reveal;
+        if (this._revealed.has(id)) this._revealed.delete(id); else this._revealed.add(id);
+        return this._render();
+      }
       const b = e.target.closest("[data-act]");
       if (!b) return;
       const entry = this._data && this._data.entries.find((x) => x.id === b.dataset.id);
@@ -915,8 +962,8 @@ class VtoCodes extends VtoBase {
     const count = (s) => entries.filter((e) => e.status === s).length;
     // tijdelijk: met een geldigheid of een maximum aantal keer, en nog niet uit dienst
     const temp = (e) => e.status !== "retired" && !!(e.valid_until || e.valid_from || e.max_uses);
-    const tabs = [["active", "Actief", count("active")], ["temp", "Tijdelijk", entries.filter(temp).length],
-      ["blocked", "Geblokkeerd", count("blocked")], ["retired", "Uit dienst", count("retired")], ["all", "Alles", entries.length]];
+    const tabs = [["all", "Alles", entries.length], ["active", "Actief", count("active")], ["temp", "Tijdelijk", entries.filter(temp).length],
+      ["blocked", "Geblokkeerd", count("blocked")], ["retired", "Uit dienst", count("retired")]];
     $("tabs").innerHTML = tabs.map(([v, l, n]) => `<button class="btn ${this._status === v ? "active" : ""}" data-tab="${v}">${l} (${n})</button>`).join("");
     $("tabs").querySelectorAll("[data-tab]").forEach((b) => b.addEventListener("click", () => { this._status = b.dataset.tab; this._render(); }));
     const q = this._q;
@@ -925,7 +972,10 @@ class VtoCodes extends VtoBase {
       && (!q || e.name.toLowerCase().includes(q) || String(e.secret).toLowerCase().includes(q)));
     const sec = (e) => e.kind === "badge"
       ? `<span class="mono">${esc(e.secret)}</span>`
-      : (this._show ? `<span class="mono">${esc(e.secret)}</span>` : `<span class="hidden">&bull;&bull;&bull;&bull;&bull;&bull;</span>`);
+      : this._show ? `<span class="mono">${esc(e.secret)}</span>`
+      : this._revealed.has(e.id)
+        ? `<button class="reveal" data-reveal="${esc(e.id)}" title="Klik om te verbergen"><span class="mono">${esc(e.secret)}</span><ha-icon icon="mdi:eye-off-outline"></ha-icon></button>`
+        : `<button class="reveal" data-reveal="${esc(e.id)}" title="Klik om de code te tonen"><span class="hidden">&bull;&bull;&bull;&bull;&bull;&bull;</span><ha-icon icon="mdi:eye-outline"></ha-icon></button>`;
     const acts = (e) => {
       const b = (act, label, cls) => `<button class="btn ${cls || ""}" data-act="${act}" data-id="${esc(e.id)}">${label}</button>`;
       const share = e.kind === "code" ? b("share", "Delen") : "";
@@ -1374,12 +1424,12 @@ const HELP_DOC = {
       steps: ["Open <b>Overzicht</b>.", "Klik bij de juiste deur op <b>Deur openen</b>.", "De knop wordt rood: klik binnen 6 seconden nog eens.", "\"... is geopend.\" verschijnt. In de historiek staat Op afstand met je naam."],
       tip: "Enkel voor beheerders. Elke opening op afstand staat bij Wijzigingen." },
     { icon: "mdi:history", title: "Nagaan wie binnenkwam", sub: "Zoeken, per persoon, CSV", tab: "historiek", tabName: "Historiek",
-      steps: ["Open <b>Historiek</b>.", "Zoek op naam of kies een deur, geopend of geweigerd, en een periode.", "Klik op <b>Per persoon</b> voor een overzicht per persoon; klik op een naam om te filteren.", "Het camera-icoon in de laatste kolom opent de foto van die toegang. <b>CSV</b> geeft alles voor Excel."] },
+      steps: ["Open <b>Historiek</b>.", "Zoek op naam of kies een deur, geopend of geweigerd, en een periode.", "Klik op <b>Per persoon</b> voor een overzicht per persoon; klik op een naam om te filteren.", "Klik op <b>Per dag</b> voor een lijst per dag (toegangen, geopend, geweigerd, personen, eerste en laatste, per deur); klik op een dag voor alle toegangen van die dag. Het kruisje bij Dag wist die filter.", "Het camera-icoon in de laatste kolom opent de foto van die toegang. <b>CSV</b> geeft alles voor Excel."] },
   ],
   topics: [
     { title: "Overzicht", sub: "Status per deur, laatste toegang, deur openen", html: hpTable([["Kaart per deur", "Online of Offline, laatste toegang (wie, hoe, wanneer) met foto, aantallen van vandaag, codes en badges"], ["Deur openen", "Enkel beheerders, met bevestiging"], ["Recente toegangen", "De laatste 6 van die deur: tijd (vandaag enkel het uur), naam, icoon voor de methode, vinkje geopend of kruisje geweigerd, camera voor de foto. Ga met de muis over een rij voor alle details, of tik op de rij om de volledige naam te zien"]]) },
-    { title: "Historiek", sub: "Toegangen van het laatste jaar", html: `<p>Filters: zoeken, deur, status, periode (vandaag tot 1 jaar of eigen). Weergave Toegangen of Per persoon. CSV voor Excel.</p>` + hpTable([["Binnenpost 9901, 9902, 9903", "Geopend via die binnenpost"], ["Op afstand", "Geopend met Deur openen; bij Hoe staat wie"], ["Foute code", "Een code die niet bestaat of niet geldig is voor die deur"], ["Onbekende badge", "Een badge die niet gekend is"], ["Ongeldige invoer", "Onvolledige invoer op het klavier"], ["Exitknop", "Geopend met de knop binnen"]]) },
-    { title: "Codes en badges", sub: "Statussen en knoppen", html: hpTable([["Actief", "Staat op de toestellen en werkt"], ["Tijdelijk (tab)", "Alle codes met een geldigheid of eenmalig gebruik die nog niet uit dienst zijn, ook de wachtende"], ["Wacht op begin", "Geldigheid begint later; komt er vanzelf op (of Nu al activeren)"], ["Geblokkeerd", "Tijdelijk van de toestellen, tot een tijdstip of tot deblokkeren"], ["Uit dienst", "Van de toestellen, bewaard en herstelbaar"], ["Eenmalig", "Vervalt na de eerste opening"], ["Wijzigingen", "Onderaan: wie wat wanneer deed, ook de planner en openen op afstand"]]) },
+    { title: "Historiek", sub: "Toegangen van het laatste jaar", html: `<p>Filters: zoeken, deur, status, periode (vandaag tot 1 jaar of eigen). Weergave Toegangen, Per persoon of Per dag. CSV voor Excel.</p>` + hpTable([["Binnenpost 9901, 9902, 9903", "Geopend via die binnenpost"], ["Op afstand", "Geopend met Deur openen; bij Hoe staat wie"], ["Foute code", "Een code die niet bestaat of niet geldig is voor die deur"], ["Onbekende badge", "Een badge die niet gekend is"], ["Ongeldige invoer", "Onvolledige invoer op het klavier"], ["Exitknop", "Geopend met de knop binnen"]]) },
+    { title: "Codes en badges", sub: "Statussen en knoppen", html: hpTable([["Alles (tab)", "Eerste tab: alle codes en badges, ook uit dienst"], ["Code tonen", "Klik op de puntjes om die ene code te zien, nog eens klikken verbergt ze; Codes tonen toont ze allemaal"], ["Actief", "Staat op de toestellen en werkt"], ["Tijdelijk (tab)", "Alle codes met een geldigheid of eenmalig gebruik die nog niet uit dienst zijn, ook de wachtende"], ["Wacht op begin", "Geldigheid begint later; komt er vanzelf op (of Nu al activeren)"], ["Geblokkeerd", "Tijdelijk van de toestellen, tot een tijdstip of tot deblokkeren"], ["Uit dienst", "Van de toestellen, bewaard en herstelbaar"], ["Eenmalig", "Vervalt na de eerste opening"], ["Wijzigingen", "Onderaan: wie wat wanneer deed, ook de planner en openen op afstand"]]) },
     { title: "Aan de deur", sub: "Hoe open je", html: hpTable([["Code", "Typ <b># code #</b> op het klavier"], ["Badge", "Hou de badge tegen de lezer"], ["Binnenpost", "Opentoets op de binnenpost"]]) },
     { title: "Foto's", sub: "Bij elke toegang, 30 dagen", html: `<p>Bij elke toegang neemt Home Assistant een foto met de camera van de buitenpost. Enkel beheerders zien ze. Na 30 dagen worden ze gewist: de Belgische camerawet laat camerabeelden maximaal een maand bewaren, tenzij als bewijs nodig. Kammerstraat maakt nog geen foto's (camera moet ter plaatse aangezet worden).</p>` },
     { title: "Goed om te weten", sub: "Snelheid en veiligheid", html: hpTable([["Snelheid", "Een actie op een toestel duurt 10 tot 20 seconden"], ["Veiligheid", "Voor elke wijziging wordt het toestel nagekeken; klopt iets niet, dan gebeurt er niets"], ["Niets verloren", "Blokkeren en uit dienst bewaren eerst een kopie"], ["Archief", "Het toestel onthoudt 1000 toegangen; Home Assistant bewaart ze 400 dagen"]]) },
@@ -1412,7 +1462,7 @@ class VtoHandleiding extends VtoBase {
 // exist"). Daarom registreren we opnieuw zolang het nodig is, telkens via window.customElements
 // (het register dat NU actief is) en met een nieuwe subklasse (een constructor mag maar een keer).
 const CARD_CLASSES = [["btechnics-vto-overzicht", VtoOverzicht], ["btechnics-vto-toegang", VtoToegang], ["btechnics-vto-codes", VtoCodes], ["btechnics-vto-handleiding", VtoHandleiding]];
-const CARDS_VERSION = "0.8.4";
+const CARDS_VERSION = "0.8.5";
 const define = (name, cls) => {
   if (window.customElements.get(name)) return;
   try {

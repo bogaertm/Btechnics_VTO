@@ -605,3 +605,25 @@ async def test_opening_op_afstand_toont_wie(hass, devices, hass_ws_client):
     r = await hist(c, door_ids=["cafe"])
     row = next(x for x in r["rows"] if x["name"] == "Op afstand")
     assert row["method"].startswith("op afstand door ")
+
+
+async def test_historiek_per_dag(hass, devices):
+    """Per dag in de tijdzone van Home Assistant; labels (Foute code) tellen niet als persoon."""
+    from zoneinfo import ZoneInfo
+    cafe, kam = devices
+    await setup_two_entries(hass)
+    base = utc(2026, 9, 27, 21, 30)          # 23u30 Brussel, zondag
+    cafe.add_log(base, name="Merel")
+    cafe.add_log(base + 3600, name="merel")   # 00u30 maandag, andere schrijfwijze
+    cafe.add_log(base + 3700, name="?", status=0)
+    kam.add_log(base + 7200, name="Refu")
+    await poll(hass, "cafe")
+    await poll(hass, "kammerstraat")
+    r = await hass.async_add_executor_job(lambda: archive(hass).query(ZoneInfo("Europe/Brussels"), start=base - 10, end=base + 8000))
+    days = {d["day"]: d for d in r["days"]}
+    assert list(days) == ["2026-09-28", "2026-09-27"]              # nieuwste eerst
+    mon = days["2026-09-28"]
+    assert (mon["count"], mon["opened"], mon["refused"], mon["people"]) == (3, 2, 1, 2)
+    assert mon["first"] == base + 3600 and mon["last"] == base + 7200
+    assert {d["door"] for d in mon["doors"]} == {"Cafe", "Kammerstraat"}
+    assert days["2026-09-27"]["count"] == 1 and days["2026-09-27"]["people"] == 1

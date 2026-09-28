@@ -10,6 +10,7 @@ een onvolledige uitlezing voegt niets verkeerds toe en de volgende volledige uit
 
 Alle methodes zijn blokkerend en moeten in de executor draaien.
 """
+import re
 import sqlite3
 import threading
 import time
@@ -65,6 +66,12 @@ NAME = ("(CASE WHEN name NOT IN ('', '?') THEN name "
         "ELSE 'Onbekende code' END)")
 
 MAX_ROWS = 50000
+# namen die NAME zelf invult (geen echte persoon): tellen niet mee als persoon
+_LABEL_RE = re.compile(r"^(Binnenpost( \w+)?|Op afstand|Exitknop|Ongeldige invoer|Onbekende badge|Foute code|Onbekende code)$")
+
+
+def is_label(name: str) -> bool:
+    return bool(_LABEL_RE.match(name or ""))
 
 
 def _like(term: str) -> str:
@@ -329,12 +336,23 @@ class AccessArchive:
                 f"FROM access {w} GROUP BY {NAME}",
                 args,
             ).fetchall()
-            months = {}
-            for ts, st in c.execute(f"SELECT {TS}, status FROM access {w}", args):
-                m = datetime.fromtimestamp(ts, tz).strftime("%Y-%m")
+            months, days = {}, {}
+            for ts, st, name, door in c.execute(f"SELECT {TS}, status, {NAME}, door FROM access {w}", args):
+                local = datetime.fromtimestamp(ts, tz)
+                m = local.strftime("%Y-%m")
                 b = months.setdefault(m, [0, 0])
                 b[0] += 1
                 b[1] += st == "1"
+                # per dag (in de tijdzone van Home Assistant)
+                d = days.setdefault(local.strftime("%Y-%m-%d"), {"count": 0, "opened": 0, "first": ts, "last": ts,
+                                                                  "people": set(), "doors": {}})
+                d["count"] += 1
+                d["opened"] += st == "1"
+                d["first"] = min(d["first"], ts)
+                d["last"] = max(d["last"], ts)
+                if name and not is_label(name):
+                    d["people"].add(name.casefold())
+                d["doors"][door] = d["doors"].get(door, 0) + 1
         total, opened = tot["n"] or 0, tot["o"] or 0
         return {
             "max_id": int(max_id),
@@ -351,6 +369,12 @@ class AccessArchive:
             ],
             "people": _merge_people(raw_people),
             "months": [{"month": m, "count": n, "opened": o} for m, (n, o) in sorted(months.items())],
+            "days": [
+                {"day": k, "count": v["count"], "opened": v["opened"], "refused": v["count"] - v["opened"],
+                 "people": len(v["people"]), "first": v["first"], "last": v["last"],
+                 "doors": [{"door": dn, "count": n} for dn, n in sorted(v["doors"].items(), key=lambda x: (-x[1], x[0]))]}
+                for k, v in sorted(days.items(), reverse=True)
+            ],
         }
 
     def unknown_cards(self, since: int, limit: int = 20) -> list:
