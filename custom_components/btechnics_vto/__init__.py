@@ -969,14 +969,18 @@ def _register_services(hass: HomeAssistant):
             if want and want not in (c.door_name.lower(), c.door_id.lower()):
                 continue
             try:
-                res = await hass.async_add_executor_job(c._run, lambda c=c: c.client.read_configs(names))
+                if call.data.get("rpc"):
+                    res = {"rpc": await hass.async_add_executor_job(c._run, lambda c=c: c.client.read_rpc(call.data["rpc"]))}
+                else:
+                    res = await hass.async_add_executor_job(c._run, lambda c=c: c.client.read_configs(names))
             except Exception as e:  # noqa: BLE001  diagnose
                 res = {"fout": str(e)[:200]}
             out.append({"deur": c.door_name, **res})
         return {"toestellen": out}
 
     async_register_admin_service(hass, DOMAIN, "read_config", read_config, vol.Schema({
-        vol.Optional("door"): cv.string, vol.Optional("names"): vol.All(cv.ensure_list, [cv.string])}),
+        vol.Optional("door"): cv.string, vol.Optional("names"): vol.All(cv.ensure_list, [cv.string]),
+        vol.Optional("rpc"): [vol.Schema({vol.Required("method"): cv.string, vol.Optional("params"): vol.Any(dict, list, None)})]}),
         supports_response=SupportsResponse.ONLY)
 
     ID_SCHEMA = vol.Schema({vol.Required("id"): cv.string})

@@ -175,6 +175,26 @@ class VTOClient:
             out[name] = r.get("params") if r.get("result") else f"geen: {r.get('error')}"
         return out
 
+    READ_ONLY_RPC = ("system.listMethod", "system.listService", "system.methodHelp", "system.methodSignature",
+                     "configManager.getMemberNames", "configManager.getConfig", "configManager.getDefault",
+                     "magicBox.getDeviceType", "magicBox.getSoftwareVersion", "magicBox.getProductDefinition",
+                     "magicBox.getDeviceClass", "magicBox.getSystemInfo", "magicBox.getHardwareVersion")
+
+    def read_rpc(self, calls) -> list:
+        """Alleen lezen: enkel methodes uit READ_ONLY_RPC (diagnose)."""
+        out = []
+        for c in calls:
+            method, params = c.get("method"), c.get("params")
+            if method not in self.READ_ONLY_RPC:
+                out.append({"method": method, "fout": "niet toegelaten (enkel lezen)"})
+                continue
+            try:
+                r = self.call(method, params)
+                out.append({"method": method, "params": params, "result": r.get("result"), "antwoord": r.get("params"), "error": r.get("error")})
+            except Exception as e:  # noqa: BLE001  diagnose
+                out.append({"method": method, "fout": str(e)[:200]})
+        return out
+
     # ---------- lezen ----------
     def info(self):
         t = (self.call("magicBox.getDeviceType").get("params") or {}).get("type")
