@@ -662,10 +662,15 @@ class VtoToegang extends VtoBase {
     });
     this._ro.observe(this.shadowRoot.getElementById("chart"));
     this._watchMode();
+    // Home Assistant houdt een bezochte pagina soms verbonden: ook bij elke paginawissel naar een opdracht kijken
+    if (!this._locL) { this._locL = () => setTimeout(() => this._checkIntent(), 400); window.addEventListener("location-changed", this._locL); }
   }
   connectedCallback() {
+    this._checkIntent();
+  }
+  _checkIntent() {
     // opnieuw getoond (bv. via "Alles van Cafe in Historiek" op het overzicht): deurfilter overnemen
-    if (!this._hass || !this._state) return;
+    if (!this._hass || !this._state || !this.isConnected) return;
     const it = takeIntent(this._config.view || "historiek");
     if (it && it.door) {
       this._state.door = it.door;
@@ -1150,6 +1155,7 @@ class VtoCodes extends VtoBase {
       this._action(b.dataset.act, entry);
     });
     this._watchMode();
+    if (!this._locL) { this._locL = () => setTimeout(() => this._checkIntent(), 400); window.addEventListener("location-changed", this._locL); }
     this._load();
     this._timer = setInterval(() => this._load(), 30000);
   }
@@ -1165,6 +1171,11 @@ class VtoCodes extends VtoBase {
   }
   _modeChanged() {
     if (this._data) this._render();
+  }
+  _checkIntent() {
+    if (!this.isConnected || !this._data || this._form) return;
+    const it = takeIntent(this._config.view || "codes");
+    if (it && it.quick) this._openQuick();
   }
   _toggleShow() {
     this._show = !this._show;
@@ -1858,7 +1869,7 @@ class VtoHandleiding extends VtoBase {
 // exist"). Daarom registreren we opnieuw zolang het nodig is, telkens via window.customElements
 // (het register dat NU actief is) en met een nieuwe subklasse (een constructor mag maar een keer).
 const CARD_CLASSES = [["btechnics-vto-overzicht", VtoOverzicht], ["btechnics-vto-toegang", VtoToegang], ["btechnics-vto-codes", VtoCodes], ["btechnics-vto-handleiding", VtoHandleiding]];
-const CARDS_VERSION = "0.9.1";
+const CARDS_VERSION = "0.9.2";
 const define = (name, cls) => {
   if (window.customElements.get(name)) return;
   try {
