@@ -85,6 +85,18 @@ function photoBtn(hass, x, cap) {
   if (!x.photo || !isAdmin(hass)) return "";
   return `<button class="photo" data-photo="${esc(x.photo)}" data-cap="${esc(cap)}" title="Foto bekijken" aria-label="Foto bekijken"><ha-icon icon="mdi:camera"></ha-icon></button>`;
 }
+// een toegang als rij voor de gsm: uur, naam, deur en manier, foto of status
+function accessRow(hass, f, x, o) {
+  const d = new Date(x.ts * 1000);
+  const nm = x.name === "?" ? "Onbekende code" : x.name;
+  const lbl = x.name === "?" || isLabel(x.name);
+  const sub = [o.door ? x.door : "", x.method + (x.card ? ` ${x.card}` : "")].filter(Boolean).join(" · ");
+  const ph = photoBtn(hass, x, `${nm}, ${x.door}, ${f.dateTime.format(d)}`);
+  return `<div class="mrow" role="button" ${o.person === false ? "" : `data-person="${esc(x.name)}"`} title="${esc(`${nm}\n${f.dateTime.format(d)}\n${x.door}, ${x.method}\n${x.opened ? "Geopend" : "Geweigerd"}`)}">
+    <span class="tm">${esc(o.date ? f.compact.format(d) : f.time.format(d))}</span>
+    <span class="mt"><b class="${lbl ? "muted" : ""}">${esc(nm)}</b><span class="sub">${esc(sub)}${x.opened ? "" : ' · <span class="refusedtxt">geweigerd</span>'}</span></span>
+    ${ph || `<span class="dotbox"><span class="dot ${x.opened ? "open" : "refused"}" title="${x.opened ? "Geopend" : "Geweigerd"}"></span></span>`}</div>`;
+}
 async function openPhoto(root, hass, id, cap) {
   closePhoto(root);
   const lb = document.createElement("div");
@@ -152,7 +164,68 @@ const BASE_CSS = `
   .lb figcaption { color: var(--primary-text-color); font-size: 0.95rem; text-align: center; }
   button.thumb { border: 0; padding: 0; background: none; cursor: pointer; flex: none; }
   button.thumb img { width: 88px; height: 50px; object-fit: cover; border-radius: 8px; display: block; }
+  /* ---- gsm (kaart smaller dan 600 px): ha-card krijgt klasse m ---- */
+  .monly { display: none !important; }
+  ha-card.m .monly { display: revert !important; }
+  ha-card.m .donly { display: none !important; }
+  ha-card.m { padding: 12px; }
+  button.fab { display: none; position: fixed; right: 16px; bottom: calc(18px + env(safe-area-inset-bottom, 0px)); z-index: 6;
+    align-items: center; gap: 8px; border: 0; border-radius: 28px; padding: 14px 20px; font: inherit; font-size: 1rem; font-weight: 500;
+    background: #ED6928; color: #fff; box-shadow: 0 4px 14px rgba(0, 0, 0, 0.3); cursor: pointer; --mdc-icon-size: 20px; }
+  ha-card.m button.fab { display: inline-flex; }
+  ha-card.m:has(.sheet.on) button.fab { display: none; }
+  ha-card.m .fabspace { height: 72px; }
+  .shade { display: none; }
+  ha-card.m .shade:has(~ .sheet.on) { display: block; position: fixed; inset: 0; z-index: 7; background: rgba(0, 0, 0, 0.45); }
+  ha-card.m .sheet.on { position: fixed; left: 0; right: 0; bottom: 0; z-index: 8; margin: 0; max-height: 88vh; overflow-y: auto;
+    background: var(--card-background-color, #fff); border: 0; border-radius: 16px 16px 0 0; padding: 6px 16px calc(16px + env(safe-area-inset-bottom, 0px));
+    box-shadow: 0 -4px 20px rgba(0, 0, 0, 0.25); box-sizing: border-box; }
+  ha-card.m .sheet.on::before { content: ""; display: block; width: 40px; height: 4px; border-radius: 2px; background: var(--divider-color); margin: 4px auto 10px; }
+  ha-card.m .sheet button.btn, ha-card.m .sheet a.btn, ha-card.m .sheet input, ha-card.m .sheet select { min-height: 44px; }
+  .mlist { display: flex; flex-direction: column; }
+  .mrow { display: flex; align-items: center; gap: 10px; min-height: 52px; padding: 6px 2px; border: 0; border-bottom: 1px solid var(--divider-color);
+    background: none; font: inherit; color: var(--primary-text-color); text-align: left; width: 100%; box-sizing: border-box; cursor: pointer; }
+  .mrow:last-child { border-bottom: 0; }
+  .mrow .mt { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+  .mrow .mt b, .mrow .mt .sub { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .mrow .mt b { font-weight: 500; }
+  .mrow .sub { font-size: 0.85rem; color: var(--secondary-text-color); }
+  .mrow .tm { width: 3.2em; flex: none; color: var(--secondary-text-color); font-variant-numeric: tabular-nums; font-size: 0.9rem; }
+  .mrow > ha-icon { color: var(--secondary-text-color); flex: none; --mdc-icon-size: 20px; }
+  .mrow button.photo { width: 40px; height: 40px; border-radius: 10px; background: var(--secondary-background-color); padding: 0; flex: none;
+    display: inline-flex; align-items: center; justify-content: center; --mdc-icon-size: 20px; }
+  .mrow .dotbox { width: 40px; flex: none; display: flex; justify-content: center; }
+  .mday { font-size: 0.78rem; font-weight: 500; letter-spacing: 0.04em; text-transform: uppercase; color: var(--secondary-text-color); margin: 14px 2px 2px; }
+  .mday:first-child { margin-top: 2px; }
+  button.fold { display: flex; justify-content: space-between; align-items: center; width: 100%; min-height: 44px; font: inherit; color: var(--primary-text-color);
+    background: var(--secondary-background-color); border: 0; border-radius: 10px; padding: 8px 12px; cursor: pointer; margin: 4px 0 12px; }
+  button.fold span { color: var(--secondary-text-color); font-size: 0.9rem; }
+  .act { display: flex; align-items: center; gap: 14px; width: 100%; min-height: 50px; border: 0; border-bottom: 1px solid var(--divider-color); background: none;
+    font: inherit; font-size: 1rem; color: var(--primary-text-color); text-align: left; cursor: pointer; padding: 0 4px; --mdc-icon-size: 22px; }
+  .act ha-icon { color: var(--secondary-text-color); }
+  .act:last-child { border-bottom: 0; }
+  .act.danger, .act.danger ha-icon { color: var(--error-color, #db4437); }
+  .act.primary, .act.primary ha-icon { color: var(--primary-color); font-weight: 500; }
+  .actsep { height: 8px; background: var(--secondary-background-color); margin: 4px -16px; }
+  .shead { display: flex; align-items: center; gap: 12px; margin-bottom: 8px; }
+  .shead .mt { flex: 1; min-width: 0; } .shead b { font-size: 1.1rem; font-weight: 500; display: block; }
+  .av { width: 38px; height: 38px; border-radius: 50%; background: var(--secondary-background-color); color: var(--primary-text-color);
+    display: flex; align-items: center; justify-content: center; font-weight: 500; flex: none; }
 `;
+// naar een andere pagina van dit dashboard, met een opdracht voor de kaart daar (bv. meteen een tijdelijke code)
+function goView(view, intent) {
+  window.__btxvtoIntent = intent ? { ...intent, view, at: Date.now() } : null;
+  const base = location.pathname.split("/").slice(0, 2).join("/");
+  history.pushState(null, "", `${base}/${view}`);
+  window.dispatchEvent(new CustomEvent("location-changed", { detail: { replace: false } }));
+}
+function takeIntent(view) {
+  const i = window.__btxvtoIntent;
+  if (!i || i.view !== view || Date.now() - i.at > 15000) return null;
+  window.__btxvtoIntent = null;
+  return i;
+}
+const FAB = `<button class="fab" id="fab" title="Tijdelijke code maken"><ha-icon icon="mdi:timer-plus-outline"></ha-icon> Tijdelijke code</button>`;
 
 class VtoBase extends HTMLElement {
   constructor() {
@@ -182,6 +255,21 @@ class VtoBase extends HTMLElement {
   }
   _init() {}
   _hassChanged() {}
+  _modeChanged() {}
+  // gsm-weergave als de kaart smaller is dan 600 px (de breedte van de kaart, niet van het scherm)
+  _watchMode() {
+    const apply = () => {
+      const w = this.clientWidth || window.innerWidth;
+      const m = w > 0 && w < 600;
+      const card = this.shadowRoot.querySelector("ha-card");
+      if (card) card.classList.toggle("m", m);
+      if (m !== this._mobile) { const was = this._mobile; this._mobile = m; if (was !== undefined) this._modeChanged(); }
+    };
+    this._mobile = undefined;
+    apply();
+    if (!this._mro) { this._mro = new ResizeObserver(() => apply()); this._mro.observe(this); }
+    this._applyMode = apply;
+  }
   getCardSize() {
     return 6;
   }
@@ -246,7 +334,29 @@ class VtoOverzicht extends VtoBase {
       .opener .omsg { font-size: 0.85rem; }
       .opener .omsg.ok { color: var(--success-color, #0b8043); }
       .opener .omsg.error { color: var(--error-color, ${C_REFUSED}); }
-    </style><ha-card><div class="title">${esc(this._config.title || "Deuren")}</div><div id="body" class="muted">Laden...</div><div id="foot" class="foot"></div></ha-card>`;
+      button.tohist { display: none; }
+      /* gsm: geen grote laatste-toegang (staat ook bovenaan de lijst), cijfers van vandaag op een rij, grote knoppen */
+      ha-card.m .doors { gap: 12px; }
+      ha-card.m .door { padding: 12px; gap: 10px; }
+      ha-card.m .last { display: none; }
+      ha-card.m .stats { grid-template-columns: 1fr 1fr; }
+      ha-card.m .stats .stat:nth-child(n+3) { display: none; }
+      ha-card.m .stat .l { min-height: 0; }
+      ha-card.m table.recent td { height: 36px; vertical-align: middle; font-size: 0.95rem; }
+      ha-card.m table.recent col.c5 { width: 44px; }
+      ha-card.m table.recent button.photo { width: 40px; height: 34px; border-radius: 8px; background: var(--secondary-background-color); }
+      ha-card.m table.recent button.photo ha-icon { --mdc-icon-size: 18px; }
+      ha-card.m .opener { order: 9; flex-wrap: wrap; }
+      ha-card.m .opener button.btn { width: 100%; justify-content: center; min-height: 48px; font-size: 1rem; font-weight: 500;
+        background: var(--primary-color); color: var(--text-primary-color, #fff); border-color: var(--primary-color); }
+      ha-card.m .opener button.btn.sure { background: var(--error-color, ${C_REFUSED}); border-color: var(--error-color, ${C_REFUSED}); }
+      ha-card.m .opener .omsg { white-space: normal; }
+      ha-card.m button.tohist { display: block; order: 8; background: none; border: 0; color: var(--primary-color); font: inherit; padding: 6px 0; min-height: 44px; cursor: pointer; }
+    </style><ha-card><div class="title">${esc(this._config.title || "Deuren")}</div><div id="body" class="muted">Laden...</div><div id="foot" class="foot"></div>
+      ${isAdmin(this._hass) ? `${FAB}<div class="fabspace monly"></div>` : ""}</ha-card>`;
+    const fab = this.shadowRoot.getElementById("fab");
+    if (fab) fab.addEventListener("click", () => goView(this._config.codes_view || "codes", { quick: 1 }));
+    this._watchMode();
     this._load();
     this._timer = setInterval(() => this._load(), 30000);
   }
@@ -291,6 +401,7 @@ class VtoOverzicht extends VtoBase {
     }
     body.innerHTML = `<div class="doors">${doors.map((d) => this._door(d, f)).join("")}</div>`;
     body.querySelectorAll("[data-open]").forEach((b) => b.addEventListener("click", () => this._open(b)));
+    body.querySelectorAll("[data-tohist]").forEach((b) => b.addEventListener("click", () => goView(this._config.history_view || "historiek", { door: b.dataset.tohist })));
     // aanraken of klikken toont de volledige tekst (tooltip werkt niet op gsm)
     body.querySelectorAll("tr[data-row], [data-txt]").forEach((el) => el.addEventListener("click", (e) => {
       if (e.target.closest("[data-photo]")) return;
@@ -343,6 +454,7 @@ class VtoOverzicht extends VtoBase {
       </div>
       ${isAdmin(this._hass) ? `<div class="opener"><button class="btn" data-open="${esc(d.id)}" data-name="${esc(d.name)}" ${d.available ? "" : "disabled"}>
         <ha-icon icon="mdi:door-open" style="--mdc-icon-size:18px"></ha-icon> Deur openen</button><span class="omsg" data-omsg="${esc(d.id)}"></span></div>` : ""}
+      <button class="tohist" data-tohist="${esc(d.id)}">Alles van ${esc(d.name)} in Historiek &rsaquo;</button>
       <table class="recent"><colgroup><col class="c1"><col class="c2"><col class="c3"><col class="c4">${admin ? '<col class="c5">' : ""}</colgroup>${recent}</table>
     </div>`;
   }
@@ -422,21 +534,56 @@ class VtoToegang extends VtoBase {
       .more { display: flex; justify-content: center; padding: 12px 0 0; }
       .info { font-size: 0.8rem; color: var(--secondary-text-color); margin-top: 8px; }
       td.when { white-space: nowrap; font-variant-numeric: tabular-nums; }
+      .fs { display: contents; }
+      .fs .fl { font-size: 0.85rem; color: var(--secondary-text-color); margin: 6px 0 -4px; }
+      /* gsm: filters achter een knop, actieve filters als chips, grafiek ingeklapt, lijst in plaats van tabel */
+      ha-card.m .filters { flex-wrap: nowrap; position: sticky; top: var(--header-height, 56px); z-index: 3; background: var(--card-background-color, #fff);
+        margin: -4px -12px 8px; padding: 4px 12px 8px; }
+      ha-card.m .filters input[type=search] { min-width: 0; flex: 1 1 auto; min-height: 44px; }
+      ha-card.m .fs { display: none; }
+      ha-card.m .fs.on { display: flex; flex-direction: column; gap: 10px; }
+      ha-card.m .fs.on select, ha-card.m .fs.on input, ha-card.m .fs.on button.btn { width: 100%; }
+      ha-card.m .fs.on .dates.on { display: flex; flex-direction: column; align-items: stretch; }
+      ha-card.m .fs h3 { margin: 0; font-size: 1.05rem; font-weight: 500; }
+      button.fbtn { position: relative; min-height: 44px; flex: none; }
+      button.fbtn i { position: absolute; top: -6px; right: -6px; font-style: normal; font-size: 0.7rem; background: #ED6928; color: #fff; border-radius: 9px; padding: 0 6px; line-height: 18px; }
+      .fchips { display: flex; gap: 6px; flex-wrap: wrap; margin: -2px 0 10px; }
+      .fchips button { border: 0; border-radius: 16px; padding: 6px 12px; background: var(--primary-color); color: var(--text-primary-color, #fff); font: inherit; font-size: 0.85rem; cursor: pointer; }
+      ha-card.m .personchip.on { min-height: 34px; }
+      ha-card.m .filters .personchip { display: none; }
+      ha-card.m .kpis { grid-template-columns: repeat(3, 1fr); gap: 6px; }
+      ha-card.m .kpi { padding: 6px 8px; } ha-card.m .kpi .v { font-size: 1.1rem; } ha-card.m .kpi .l { font-size: 0.75rem; }
+      ha-card.m .kpi:nth-child(4) { display: none; }
+      ha-card.m #chart:not(.open) { display: none; }
+      ha-card.m .tabs { background: var(--secondary-background-color); border-radius: 10px; padding: 3px; gap: 3px; }
+      ha-card.m .tabs .btn { flex: 1; border: 0; background: none; min-height: 38px; padding: 4px; }
+      ha-card.m .tabs .btn.active { background: var(--card-background-color, #fff); color: var(--primary-text-color); font-weight: 500; box-shadow: 0 1px 3px rgba(0, 0, 0, 0.15); }
     </style>
     <ha-card>
       <div class="title">${esc(c.title || "Toegangshistoriek")}</div>
       <div class="filters">
         <input id="q" type="search" list="names" placeholder="Zoek persoon of badgenummer" autocomplete="off">
         <datalist id="names"></datalist>
+        <button id="fbtn" class="btn fbtn monly">Filters</button>
         <span id="dchip" class="personchip"><span id="dname"></span><button id="dclear" title="Dagfilter wissen"><ha-icon icon="mdi:close" style="--mdc-icon-size:18px"></ha-icon></button></span>
         <span id="pchip" class="personchip"><span id="pname"></span><button id="pclear" title="Persoonfilter wissen"><ha-icon icon="mdi:close" style="--mdc-icon-size:18px"></ha-icon></button></span>
-        <select id="door"><option value="">Alle deuren</option></select>
-        <select id="status"><option value="all">Alle</option><option value="opened">Geopend</option><option value="refused">Geweigerd</option></select>
-        <select id="period">${PERIODS.map(([v, l]) => `<option value="${v}">${l}</option>`).join("")}</select>
-        <span id="dates" class="dates"><input id="from" type="date"> tot <input id="to" type="date"></span>
-        <button id="csv" class="btn" title="Exporteer de gefilterde toegangen als CSV (Excel)"><ha-icon icon="mdi:download" style="--mdc-icon-size:18px"></ha-icon> CSV</button>
+        <div class="shade" id="fshade"></div>
+        <div id="fs" class="fs sheet">
+          <h3 class="monly">Filters</h3>
+          <div class="fl monly">Deur</div>
+          <select id="door"><option value="">Alle deuren</option></select>
+          <div class="fl monly">Resultaat</div>
+          <select id="status"><option value="all">Alle</option><option value="opened">Geopend</option><option value="refused">Geweigerd</option></select>
+          <div class="fl monly">Periode</div>
+          <select id="period">${PERIODS.map(([v, l]) => `<option value="${v}">${l}</option>`).join("")}</select>
+          <span id="dates" class="dates"><input id="from" type="date"> tot <input id="to" type="date"></span>
+          <button id="csv" class="btn" title="Exporteer de gefilterde toegangen als CSV (Excel)"><ha-icon icon="mdi:download" style="--mdc-icon-size:18px"></ha-icon> CSV</button>
+          <button id="fdone" class="btn monly" style="background:var(--primary-color);color:var(--text-primary-color,#fff);border-color:var(--primary-color)">Toon resultaten</button>
+        </div>
       </div>
+      <div id="fchips" class="fchips monly"></div>
       <div id="kpis" class="kpis"></div>
+      <button id="cfold" class="fold monly">Grafiek per maand <span>tonen</span></button>
       <div id="chart" class="chartwrap"></div>
       <div class="tabs">
         <button id="tlist" class="btn active">Toegangen</button>
@@ -446,8 +593,33 @@ class VtoToegang extends VtoBase {
       <div id="out" class="scroll"><div class="muted">Laden...</div></div>
       <div id="more" class="more"></div>
       <div id="info" class="info"></div>
+      ${isAdmin(this._hass) ? `${FAB}<div class="fabspace monly"></div>` : ""}
     </ha-card>`;
     const $ = (id) => this.shadowRoot.getElementById(id);
+    const it = takeIntent(c.view || "historiek");
+    if (it && it.door) this._state.door = it.door;
+    if ($("fab")) $("fab").addEventListener("click", () => goView(c.codes_view || "codes", { quick: 1 }));
+    const fsOpen = (on) => $("fs").classList.toggle("on", on);
+    $("fbtn").addEventListener("click", () => fsOpen(true));
+    $("fdone").addEventListener("click", () => fsOpen(false));
+    $("fshade").addEventListener("click", () => fsOpen(false));
+    $("cfold").addEventListener("click", () => {
+      this._chartOpen = !this._chartOpen;
+      $("chart").classList.toggle("open", this._chartOpen);
+      $("cfold").querySelector("span").textContent = this._chartOpen ? "verbergen" : "tonen";
+      if (this._chartOpen && this._res) requestAnimationFrame(() => this._chart());
+    });
+    $("fchips").addEventListener("click", (e) => {
+      const b = e.target.closest("[data-fclear]");
+      if (!b) return;
+      const k = b.dataset.fclear;
+      if (k === "door") { this._state.door = ""; $("door").value = ""; }
+      if (k === "status") { this._state.status = "all"; $("status").value = "all"; }
+      if (k === "period") { this._state.period = String(c.period || "365"); $("period").value = this._state.period; $("dates").classList.remove("on"); }
+      if (k === "person") return this._setPerson(null);
+      if (k === "day") return this._setDay(null);
+      this._reload();
+    });
     $("period").value = this._state.period;
     $("q").addEventListener("input", (e) => {
       // waarde meteen uitlezen: na het event wijst e.target (shadow DOM) naar de kaart zelf
@@ -476,6 +648,7 @@ class VtoToegang extends VtoBase {
     $("dclear").addEventListener("click", () => this._setDay(null));
     $("csv").addEventListener("click", () => this._csv());
     this.shadowRoot.addEventListener("click", (e) => {
+      if (e.target.closest("[data-photo]")) return;
       const b = e.target.closest("[data-person]");
       if (b) this._setPerson(b.dataset.person);
       const dd = e.target.closest("[data-day]");
@@ -488,6 +661,36 @@ class VtoToegang extends VtoBase {
       if (this._res && w && Math.abs(w - (this._chartW || 0)) > 4) this._chart();
     });
     this._ro.observe(this.shadowRoot.getElementById("chart"));
+    this._watchMode();
+  }
+  connectedCallback() {
+    // opnieuw getoond (bv. via "Alles van Cafe in Historiek" op het overzicht): deurfilter overnemen
+    if (!this._hass || !this._state) return;
+    const it = takeIntent(this._config.view || "historiek");
+    if (it && it.door) {
+      this._state.door = it.door;
+      const sel = this.shadowRoot.getElementById("door");
+      if (sel) sel.value = it.door;
+      this._reload();
+    }
+  }
+  _modeChanged() {
+    if (this._res) this._renderOut();
+  }
+  _syncFilters() {
+    // gsm: teller op de knop Filters en chips voor de actieve filters
+    const $ = (id) => this.shadowRoot.getElementById(id);
+    if (!$("fchips")) return;
+    const s = this._state, def = String(this._config.period || "365");
+    const chips = [];
+    if (s.person !== null) chips.push(["person", s.person === "?" ? "onbekende code" : s.person]);
+    if (s.day) chips.push(["day", this._fmt.date.format(new Date(`${s.day}T12:00:00Z`))]);
+    if (s.door) { const o = $("door").querySelector(`option[value="${CSS.escape(s.door)}"]`); chips.push(["door", o ? o.textContent : "Deur"]); }
+    if (s.status !== "all") chips.push(["status", s.status === "opened" ? "Geopend" : "Geweigerd"]);
+    if (s.period !== def && !s.day) chips.push(["period", s.period === "custom" ? `${s.from || "…"} tot ${s.to || "…"}` : (PERIODS.find((x) => x[0] === s.period) || [0, s.period])[1]]);
+    $("fchips").innerHTML = chips.map(([k, l]) => `<button data-fclear="${k}" title="Filter wissen">${esc(l)} &#x2715;</button>`).join("");
+    const n = (s.door ? 1 : 0) + (s.status !== "all" ? 1 : 0) + (s.period !== def ? 1 : 0);
+    $("fbtn").innerHTML = `Filters${n ? `<i>${n}</i>` : ""}`;
   }
   async _loadDoors() {
     try {
@@ -497,6 +700,7 @@ class VtoToegang extends VtoBase {
       sel.innerHTML = `<option value="">Alle deuren</option>` + d.doors.map((x) => `<option value="${esc(x.id)}">${esc(x.name)}</option>`).join("");
       sel.value = this._state.door;
       this._archive = d.archive || {};
+      this._syncFilters();
     } catch (e) {
       // bv. tijdens het opstarten van Home Assistant: later opnieuw proberen
       clearTimeout(this._doorsRetry);
@@ -552,6 +756,7 @@ class VtoToegang extends VtoBase {
   }
   async _reload() {
     this._state.offset = 0;
+    this._syncFilters();
     const seq = (this._seq = (this._seq || 0) + 1);
     clearTimeout(this._retry);
     const mb = this.shadowRoot.getElementById("morebtn");
@@ -680,6 +885,7 @@ class VtoToegang extends VtoBase {
     const out = this.shadowRoot.getElementById("out");
     const more = this.shadowRoot.getElementById("more");
     more.innerHTML = "";
+    if (this._mobile) return this._renderMobile(r, f, out, more);
     if (this._state.view === "days") {
       const days = r.days || [];
       if (!days.length) { out.innerHTML = `<div class="empty">Geen toegangen gevonden</div>`; return; }
@@ -711,6 +917,40 @@ class VtoToegang extends VtoBase {
         <td class="muted">${esc(x.method)}${x.card ? ` <span class="mono">${esc(x.card)}</span>` : ""}</td>
         <td><span class="status"><span class="dot ${x.opened ? "open" : "refused"}"></span>${x.opened ? "Geopend" : "Geweigerd"}</span></td>${photoCell(this._hass, x, `${x.name === "?" ? "Onbekende code" : x.name}, ${x.door}, ${f.dateTime.format(d)}`)}</tr>`; }).join("")}
       </tbody></table>`;
+    if (r.rows.length < r.total) {
+      more.innerHTML = `<button class="btn" id="morebtn">Meer tonen (${r.rows.length} van ${r.total.toLocaleString("nl-BE")})</button>`;
+      more.querySelector("#morebtn").addEventListener("click", () => this._loadMore());
+    }
+  }
+  _renderMobile(r, f, out, more) {
+    // gsm: lijsten in plaats van brede tabellen; alles past in de breedte van het scherm
+    const none = `<div class="empty">Geen toegangen gevonden</div>`;
+    const chev = '<ha-icon icon="mdi:chevron-right"></ha-icon>';
+    const v = this._state.view;
+    if (v === "days") {
+      const days = r.days || [];
+      out.innerHTML = days.length ? `<div class="mlist">${days.map((d) => `<div class="mrow" role="button" data-day="${esc(d.day)}">
+        <span class="mt"><b>${esc(f.date.format(new Date(`${d.day}T12:00:00Z`)))}</b>
+        <span class="sub">${d.count} toegangen${d.refused ? `, <span class="refusedtxt">${d.refused} geweigerd</span>` : ""}, ${esc(f.time.format(new Date(d.first * 1000)))} tot ${esc(f.time.format(new Date(d.last * 1000)))}</span>
+        <span class="sub">${d.doors.map((x) => `${esc(x.door)} ${x.count}`).join(", ")}</span></span>${chev}</div>`).join("")}</div>` : none;
+      return;
+    }
+    if (v === "people") {
+      out.innerHTML = r.people.length ? `<div class="mlist">${r.people.map((p) => `<div class="mrow" role="button" data-person="${esc(p.name)}">
+        <span class="mt"><b class="${isLabel(p.name) || p.name === "?" ? "muted" : ""}">${p.name === "?" ? "Onbekende code" : esc(p.name)}</b>
+        <span class="sub">${p.count} toegangen${p.refused ? `, <span class="refusedtxt">${p.refused} geweigerd</span>` : ""}, laatst ${esc(f.compact.format(new Date(p.last * 1000)))}</span>
+        <span class="sub">${p.doors.map(esc).join(", ")}</span></span>${chev}</div>`).join("")}</div>` : none;
+      return;
+    }
+    if (!r.rows.length) { out.innerHTML = none; return; }
+    const today = f.date.format(new Date()), yest = f.date.format(new Date(Date.now() - 86400000));
+    let last = "", html = "";
+    for (const x of r.rows) {
+      const d = new Date(x.ts * 1000), day = f.date.format(d);
+      if (day !== last) { html += `<div class="mday">${day === today ? "Vandaag" : day === yest ? `Gisteren, ${esc(day)}` : esc(day)}</div>`; last = day; }
+      html += accessRow(this._hass, f, x, { door: true });
+    }
+    out.innerHTML = `<div class="mlist">${html}</div>`;
     if (r.rows.length < r.total) {
       more.innerHTML = `<button class="btn" id="morebtn">Meer tonen (${r.rows.length} van ${r.total.toLocaleString("nl-BE")})</button>`;
       more.querySelector("#morebtn").addEventListener("click", () => this._loadMore());
@@ -832,52 +1072,84 @@ class VtoCodes extends VtoBase {
         table.list td.kind, table.list td.kind + td { display: inline-block; margin-right: 8px; }
         .acts { justify-content: flex-start; margin-top: 6px; }
       }
+      /* gsm: rij per code of badge zonder knoppen, acties in een menu van onderaf */
+      ha-card.m .bar { flex-wrap: nowrap; }
+      ha-card.m .bar input[type=search] { min-width: 0; flex: 1 1 auto; min-height: 44px; }
+      ha-card.m .bar #plus { min-height: 44px; flex: none; }
+      ha-card.m .tabs { flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; margin: 0 -12px 8px; padding: 0 12px 2px; gap: 6px; }
+      ha-card.m .tabs::-webkit-scrollbar { display: none; }
+      ha-card.m .tabs .btn { white-space: nowrap; border-radius: 18px; min-height: 36px; padding: 4px 14px; flex: none; }
+      ha-card.m .tabs .btn.active { background: var(--primary-color); color: var(--text-primary-color, #fff); border-color: var(--primary-color); }
+      .tabs .tsep { flex: none; width: 1px; background: var(--divider-color); margin: 4px 2px; }
+      .mrow .st { font-size: 0.85rem; }
+      .mrow .st.blocked { color: var(--warning-color, #b06000); } .mrow .st.retired { color: var(--secondary-text-color); }
+      .bigcode { display: flex; flex-direction: column; align-items: center; justify-content: center; width: 100%; min-height: 64px; margin: 10px 0 6px;
+        border: 0; border-radius: 12px; background: var(--secondary-background-color); color: var(--primary-text-color); font: inherit; cursor: pointer; }
+      .bigcode .mono, .bigcode .hidden { font-size: 1.6rem; letter-spacing: 4px; }
+      .bigcode small { color: var(--secondary-text-color); font-size: 0.8rem; }
+      .smsg { margin: 0 0 8px; }
     </style>
     <ha-card>
       <div class="title">${esc(this._config.title || "Codes en badges")}</div>
       <div class="bar">
         <input id="q" type="search" placeholder="Zoek persoon, code of badgenummer" autocomplete="off">
-        <select id="kind"><option value="all">Codes en badges</option><option value="code">Codes</option><option value="badge">Badges</option></select>
-        <button id="toggle" class="btn"><ha-icon icon="mdi:eye" style="--mdc-icon-size:18px"></ha-icon> Codes tonen</button>
-        <button id="quick" class="btn primary"><ha-icon icon="mdi:timer-outline" style="--mdc-icon-size:18px"></ha-icon> Tijdelijke code</button>
-        <button id="new" class="btn primary"><ha-icon icon="mdi:plus" style="--mdc-icon-size:18px"></ha-icon> Nieuwe code</button>
-        <button id="newbadge" class="btn primary"><ha-icon icon="mdi:card-account-details-outline" style="--mdc-icon-size:18px"></ha-icon> Nieuwe badge</button>
+        <select id="kind" class="donly"><option value="all">Codes en badges</option><option value="code">Codes</option><option value="badge">Badges</option></select>
+        <button id="toggle" class="btn donly"><ha-icon icon="mdi:eye" style="--mdc-icon-size:18px"></ha-icon> Codes tonen</button>
+        <button id="quick" class="btn primary donly"><ha-icon icon="mdi:timer-outline" style="--mdc-icon-size:18px"></ha-icon> Tijdelijke code</button>
+        <button id="new" class="btn primary donly"><ha-icon icon="mdi:plus" style="--mdc-icon-size:18px"></ha-icon> Nieuwe code</button>
+        <button id="newbadge" class="btn primary donly"><ha-icon icon="mdi:card-account-details-outline" style="--mdc-icon-size:18px"></ha-icon> Nieuwe badge</button>
+        <button id="plus" class="btn monly" title="Nieuw"><ha-icon icon="mdi:plus" style="--mdc-icon-size:20px"></ha-icon> Nieuw</button>
       </div>
       <div class="tabs" id="tabs"></div>
-      <div id="panel" class="panel"></div>
-      <div id="hist" class="panel hist"></div>
+      <div class="shade" id="shade"></div>
+      <div id="panel" class="panel sheet"></div>
+      <div id="hist" class="panel hist sheet"></div>
       <div id="msg" class="msg"></div>
       <div id="out" class="scroll"><div class="muted">Laden...</div></div>
-      <div class="title" style="margin-top:20px;font-size:1.05rem">Wijzigingen</div>
+      <div class="title donly" style="margin-top:20px;font-size:1.05rem">Wijzigingen</div>
       <div id="audit" class="scroll"></div>
+      ${FAB}<div class="fabspace monly"></div>
     </ha-card>`;
     const $ = (id) => this.shadowRoot.getElementById(id);
+    $("fab").addEventListener("click", () => this._openQuick());
+    $("plus").addEventListener("click", () => this._newSheet());
+    $("shade").addEventListener("click", () => { if (this._busy) return; this._closeForm(); this._closeHistory(); });
     $("q").addEventListener("input", (e) => { this._q = e.target.value.trim().toLowerCase(); this._render(); });
     $("kind").addEventListener("change", (e) => { this._kind = e.target.value; this._render(); });
-    $("toggle").addEventListener("click", () => {
-      this._show = !this._show;
-      this._revealed.clear();
-      $("toggle").innerHTML = `<ha-icon icon="${this._show ? "mdi:eye-off" : "mdi:eye"}" style="--mdc-icon-size:18px"></ha-icon> ${this._show ? "Codes verbergen" : "Codes tonen"}`;
-      this._render();
-    });
+    $("toggle").addEventListener("click", () => this._toggleShow());
     $("new").addEventListener("click", () => this._openForm("add", null));
     $("quick").addEventListener("click", () => this._openQuick());
     $("newbadge").addEventListener("click", () => this._openForm("addbadge", null));
     this.shadowRoot.addEventListener("click", (e) => {
       const h = e.target.closest("[data-hist]");
-      if (h) return this._history(h.dataset.hist);
+      if (h) { if (this._mobile) this._closeForm(); return this._history(h.dataset.hist); }
       const rv = e.target.closest("[data-reveal]");
       if (rv) {
         // klik op een code: enkel die code tonen of weer verbergen
         const id = rv.dataset.reveal;
         if (this._revealed.has(id)) this._revealed.delete(id); else this._revealed.add(id);
+        if (this._form && this._form.type === "sheet") this._entrySheet(this._form.entry);
         return this._render();
       }
+      const sh = e.target.closest("[data-sheet]");
+      if (sh) { const en = this._data && this._data.entries.find((x) => x.id === sh.dataset.sheet); if (en) this._entrySheet(en); return; }
+      const nw = e.target.closest("[data-new]");
+      if (nw) {
+        const k = nw.dataset.new;
+        this._closeForm();
+        if (k === "quick") return this._openQuick();
+        if (k === "show") return this._toggleShow();
+        return this._openForm(k, null);
+      }
+      const kd = e.target.closest("[data-kind]");
+      if (kd) { this._kind = this._kind === kd.dataset.kind ? "all" : kd.dataset.kind; $("kind").value = this._kind; return this._render(); }
+      if (e.target.closest("#afold")) { this._auditOpen = !this._auditOpen; return this._render(); }
       const b = e.target.closest("[data-act]");
       if (!b) return;
       const entry = this._data && this._data.entries.find((x) => x.id === b.dataset.id);
       this._action(b.dataset.act, entry);
     });
+    this._watchMode();
     this._load();
     this._timer = setInterval(() => this._load(), 30000);
   }
@@ -891,12 +1163,66 @@ class VtoCodes extends VtoBase {
       this._timer = setInterval(() => this._load(), 30000);
     }
   }
+  _modeChanged() {
+    if (this._data) this._render();
+  }
+  _toggleShow() {
+    this._show = !this._show;
+    this._revealed.clear();
+    this.shadowRoot.getElementById("toggle").innerHTML = `<ha-icon icon="${this._show ? "mdi:eye-off" : "mdi:eye"}" style="--mdc-icon-size:18px"></ha-icon> ${this._show ? "Codes verbergen" : "Codes tonen"}`;
+    this._render();
+  }
+  _newSheet() {
+    // gsm: een knop Nieuw in plaats van drie
+    const p = this.shadowRoot.getElementById("panel");
+    this._message("");
+    this._form = { type: "new" };
+    const it = (k, icon, t, sub) => `<button class="act" data-new="${k}"><ha-icon icon="${icon}"></ha-icon><span style="flex:1">${t}</span><span class="muted" style="font-size:0.85rem">${sub}</span></button>`;
+    p.innerHTML = `<h3>Nieuw</h3>${it("quick", "mdi:timer-outline", "Tijdelijke code", "pakket, technicus, gast")}${it("add", "mdi:dialpad", "Vaste code", "medewerker, vrijwilliger")}
+      ${it("addbadge", "mdi:card-account-details-outline", "Badge", "badge registreren")}<div class="actsep"></div>
+      ${it("show", this._show ? "mdi:eye-off" : "mdi:eye", this._show ? "Codes verbergen" : "Alle codes tonen", "")}
+      <button class="act" id="cancel"><ha-icon icon="mdi:close"></ha-icon>Sluiten</button>`;
+    p.querySelector("#cancel").addEventListener("click", () => this._closeForm());
+    p.classList.add("on");
+  }
+  _entrySheet(e) {
+    // gsm: alle acties voor een code of badge in een menu van onderaf
+    const p = this.shadowRoot.getElementById("panel");
+    this._message("");
+    this._form = { type: "sheet", entry: e };
+    const doors = (e.doors.length ? e.doors : e.stored).map((d) => d.name);
+    const shown = this._show || this._revealed.has(e.id);
+    const secret = e.kind === "badge" ? `<div class="bigcode" style="cursor:default"><span class="mono">${esc(e.secret)}</span><small>badgenummer</small></div>`
+      : `<button class="bigcode" data-reveal="${esc(e.id)}">${shown ? `<span class="mono">${esc(e.secret)}</span><small>tik om te verbergen</small>` : `<span class="hidden">&bull;&bull;&bull;&bull;&bull;&bull;</span><small>tik om de code te tonen</small>`}</button>`;
+    const a = (act, icon, label, cls) => `<button class="act ${cls || ""}" data-act="${act}" data-id="${esc(e.id)}"><ha-icon icon="${icon}"></ha-icon>${label}</button>`;
+    const share = e.kind === "code" ? a("share", "mdi:share-variant", "Delen") : "";
+    let main, danger;
+    if (e.status === "active") { main = share + a("edit", "mdi:pencil", "Aanpassen") + a("block", "mdi:lock-clock", "Blokkeren"); danger = a("retire", "mdi:account-cancel", "Uit dienst zetten", "danger"); }
+    else if (this._waiting(e)) { main = share + a("unblock", "mdi:play", "Nu al activeren", "primary") + a("edit", "mdi:pencil", "Aanpassen"); danger = a("retire", "mdi:account-cancel", "Uit dienst zetten", "danger"); }
+    else if (e.status === "blocked") { main = a("unblock", "mdi:lock-open-variant", "Deblokkeren", "primary") + a("block", "mdi:lock-clock", "Einde blokkering aanpassen") + a("edit", "mdi:pencil", "Aanpassen"); danger = a("retire", "mdi:account-cancel", "Uit dienst zetten", "danger"); }
+    else { main = a("restore", "mdi:restore", "Herstellen", "primary") + a("edit", "mdi:pencil", "Aanpassen"); danger = a("forget", "mdi:delete-forever", "Definitief verwijderen", "danger"); }
+    p.innerHTML = `<div class="shead"><span class="av">${esc((e.name || "?").trim().charAt(0).toUpperCase())}</span>
+        <div class="mt"><b>${esc(e.name || "?")}</b><span class="muted">${e.kind === "badge" ? "Badge" : "Code"}${doors.length ? ` · ${doors.map(esc).join(", ")}` : ""}</span></div></div>
+      <div class="status"><span class="dot ${e.status === "active" ? "open" : e.status}"></span>${esc(this._statusText(e))}</div>
+      ${e.valid_until && e.status !== "retired" ? `<div class="valid">Geldig tot ${esc(this._fmt.dateTime.format(new Date(e.valid_until)))}</div>` : ""}
+      ${e.max_uses && e.status !== "retired" ? `<div class="valid">${e.max_uses === 1 ? "Eenmalig" : `${e.uses || 0} van ${e.max_uses} keer gebruikt`}</div>` : ""}
+      ${e.status !== "active" && e.doors.length ? `<div class="warn">Nog actief op ${e.doors.map((d) => esc(d.name)).join(", ")}</div>` : ""}
+      ${secret}
+      ${main}<button class="act" data-hist="${esc(e.name || "")}"><ha-icon icon="mdi:history"></ha-icon>Geschiedenis</button>
+      <div class="actsep"></div>${danger}
+      <button class="act" id="cancel"><ha-icon icon="mdi:close"></ha-icon>Sluiten</button>`;
+    p.querySelector("#cancel").addEventListener("click", () => this._closeForm());
+    p.classList.add("on");
+  }
   async _load() {
     // niet verversen terwijl een formulier open is of een actie loopt: anders verdwijnt de invoer
     if (this._busy || this._form) return;
     try {
       this._data = await this._ws({ type: "btechnics_vto/manage/list" });
       this._render();
+      // vanop een ander tabblad op de oranje knop gedrukt: meteen het formulier Tijdelijke code
+      const it = takeIntent(this._config.view || "codes");
+      if (it && it.quick) this._openQuick();
     } catch (e) {
       const msg = e && e.code === "unauthorized" ? "Enkel beheerders kunnen de codes bekijken." : `Kon de codes niet laden: ${esc(errText(e))}`;
       this.shadowRoot.getElementById("out").innerHTML = `<div class="error">${msg}</div>`;
@@ -912,7 +1238,7 @@ class VtoCodes extends VtoBase {
       el.innerHTML = `<div class="head"><h3>Geschiedenis: ${esc(name)}</h3><button class="btn" id="hclose">Sluiten</button></div><div class="muted">Laden...</div>`;
       el.classList.add("on");
       el.querySelector("#hclose").addEventListener("click", () => this._closeHistory());
-      el.scrollIntoView({ block: "nearest" });
+      if (!this._mobile) el.scrollIntoView({ block: "nearest" });
     }
     const h = this._hist, seq = h.seq;
     try {
@@ -926,7 +1252,8 @@ class VtoCodes extends VtoBase {
       el.innerHTML = `<div class="head"><h3>Geschiedenis: ${esc(name)}</h3><button class="btn" id="hclose">Sluiten</button></div>
         <div class="kpis"><span><b>${r.total.toLocaleString("nl-BE")}</b> toegangen (laatste jaar)</span><span><b>${r.opened.toLocaleString("nl-BE")}</b> geopend</span>
           <span><b>${r.refused.toLocaleString("nl-BE")}</b> geweigerd</span>${last ? `<span>Laatst: <b>${esc(f.dateTime.format(new Date(last.ts * 1000)))}</b></span>` : ""}</div>
-        ${r.rows.length ? `<div class="scroll"><table><thead><tr><th>Wanneer</th><th>Deur</th><th>Hoe</th><th>Status</th>${isAdmin(this._hass) ? '<th class="ph" title="Foto"><ha-icon icon="mdi:camera-outline"></ha-icon></th>' : ""}</tr></thead><tbody>
+        ${r.rows.length && this._mobile ? `<div class="mlist">${r.rows.map((x) => accessRow(this._hass, f, x, { door: true, date: true, person: false })).join("")}</div>`
+          : r.rows.length ? `<div class="scroll"><table><thead><tr><th>Wanneer</th><th>Deur</th><th>Hoe</th><th>Status</th>${isAdmin(this._hass) ? '<th class="ph" title="Foto"><ha-icon icon="mdi:camera-outline"></ha-icon></th>' : ""}</tr></thead><tbody>
           ${r.rows.map((x) => `<tr><td class="when">${esc(f.dateTime.format(new Date(x.ts * 1000)))}</td><td>${esc(x.door)}</td><td class="muted">${esc(x.method)}</td>
             <td><span class="status"><span class="dot ${x.opened ? "open" : "refused"}"></span>${x.opened ? "Geopend" : "Geweigerd"}</span></td>${photoCell(this._hass, x, `${name}, ${x.door}, ${f.dateTime.format(new Date(x.ts * 1000))}`)}</tr>`).join("")}
           </tbody></table></div>` : `<div class="empty">Geen toegangen in het laatste jaar.</div>`}
@@ -949,6 +1276,14 @@ class VtoCodes extends VtoBase {
     const el = this.shadowRoot.getElementById("msg");
     el.className = "msg " + (ok ? "ok" : "error");
     el.textContent = text || "";
+    // gsm: het venster van onderaf bedekt de melding, dus ook bovenaan in het venster tonen
+    const p = this.shadowRoot.getElementById("panel");
+    if (this._mobile && p && p.classList.contains("on")) {
+      let sm = p.querySelector(".smsg");
+      if (!sm) { sm = document.createElement("div"); p.prepend(sm); }
+      sm.className = "smsg msg " + (ok ? "ok" : "error");
+      sm.textContent = text || "";
+    }
   }
   _waiting(e) {
     return e.status === "blocked" && e.valid_from && e.until === e.valid_from;
@@ -969,7 +1304,8 @@ class VtoCodes extends VtoBase {
     const temp = (e) => e.status !== "retired" && !!(e.valid_until || e.valid_from || e.max_uses);
     const tabs = [["all", "Alles", entries.length], ["active", "Actief", count("active")], ["temp", "Tijdelijk", entries.filter(temp).length],
       ["blocked", "Geblokkeerd", count("blocked")], ["retired", "Uit dienst", count("retired")]];
-    $("tabs").innerHTML = tabs.map(([v, l, n]) => `<button class="btn ${this._status === v ? "active" : ""}" data-tab="${v}">${l} (${n})</button>`).join("");
+    $("tabs").innerHTML = tabs.map(([v, l, n]) => `<button class="btn ${this._status === v ? "active" : ""}" data-tab="${v}">${l} (${n})</button>`).join("")
+      + (this._mobile ? `<span class="tsep"></span><button class="btn ${this._kind === "code" ? "active" : ""}" data-kind="code">Codes</button><button class="btn ${this._kind === "badge" ? "active" : ""}" data-kind="badge">Badges</button>` : "");
     $("tabs").querySelectorAll("[data-tab]").forEach((b) => b.addEventListener("click", () => { this._status = b.dataset.tab; this._render(); }));
     const q = this._q;
     const list = entries.filter((e) => (this._status === "all" || (this._status === "temp" ? temp(e) : e.status === this._status))
@@ -992,6 +1328,19 @@ class VtoCodes extends VtoBase {
     const dot = (e) => `<span class="dot ${e.status === "active" ? "open" : e.status}"></span>`;
     if (!list.length) {
       $("out").innerHTML = `<div class="empty">Niets gevonden</div>`;
+    } else if (this._mobile) {
+      const f = this._fmt;
+      $("out").innerHTML = `<div class="mlist">${list.map((e) => {
+        const doors = (e.doors.length ? e.doors : e.stored).map((d) => d.name);
+        const extra = [];
+        const kort = (iso) => f.compact.format(new Date(iso));
+        const st = e.status === "retired" ? "uit dienst" : this._waiting(e) ? `wacht tot ${kort(e.valid_from)}` : e.until ? `geblokkeerd tot ${kort(e.until)}` : "geblokkeerd";
+        if (e.status !== "active") extra.push(`<span class="st ${e.status === "retired" ? "retired" : "blocked"}">${esc(st)}</span>`);
+        else if (e.valid_until) extra.push(`<span class="st">tot ${esc(f.compact.format(new Date(e.valid_until)))}</span>`);
+        if (e.max_uses === 1 && e.status !== "retired") extra.push('<span class="st">eenmalig</span>');
+        return `<button class="mrow" data-sheet="${esc(e.id)}"><span class="av">${esc((e.name || "?").trim().charAt(0).toUpperCase())}</span>
+          <span class="mt"><b>${esc(e.name || "?")}</b><span class="sub">${e.kind === "badge" ? "badge" : "code"}${doors.length ? ` · ${doors.map(esc).join(", ")}` : ""}</span>${extra.length ? `<span class="sub">${extra.join(" · ")}</span>` : ""}</span>
+          <span class="dot ${e.status === "active" ? "open" : e.status}"></span><ha-icon icon="mdi:chevron-right"></ha-icon></button>`; }).join("")}</div>`;
     } else {
       $("out").innerHTML = `<table class="list"><thead><tr><th>Persoon</th><th>Soort</th><th>Code of badge</th><th>Deuren</th><th>Status</th><th></th></tr></thead><tbody>
         ${list.map((e) => `<tr>
@@ -1007,6 +1356,19 @@ class VtoCodes extends VtoBase {
         </tbody></table>`;
     }
     const shown = this._auditAll ? audit : audit.slice(0, 15);
+    if (this._mobile) {
+      // gsm: Wijzigingen ingeklapt, als lijst
+      $("audit").innerHTML = `<button class="fold" id="afold">Wijzigingen <span>${this._auditOpen ? "verbergen" : "tonen"}</span></button>`
+        + (!this._auditOpen ? "" : audit.length ? `<div class="mlist">${shown.map((a) => `<div class="mrow" style="cursor:default"><span class="mt">
+          <b>${esc(a.action)}: ${esc(a.name)} <span class="muted">(${a.kind === "badge" ? "badge" : a.kind === "deur" ? "deur" : "code"})</span></b>
+          <span class="sub">${esc(this._fmt.compact.format(new Date(a.ts)))} · ${esc(a.user)}${(a.doors || []).length ? ` · ${esc(a.doors.join(", "))}` : ""}</span>
+          ${a.detail ? `<span class="sub">${esc(a.detail)}</span>` : ""}</span></div>`).join("")}</div>
+          ${audit.length > 15 ? `<div class="more"><button class="btn" id="auditmore">${this._auditAll ? "Minder tonen" : `Alles tonen (${audit.length})`}</button></div>` : ""}`
+          : `<div class="muted">Nog geen wijzigingen.</div>`);
+      const amm = $("auditmore");
+      if (amm) amm.addEventListener("click", () => { this._auditAll = !this._auditAll; this._render(); });
+      return;
+    }
     $("audit").innerHTML = audit.length ? `<table class="audit"><thead><tr><th>Wanneer</th><th>Wie</th><th>Actie</th><th>Persoon</th><th>Deuren</th><th>Details</th></tr></thead><tbody>
       ${shown.map((a) => `<tr><td class="when">${this._fmt.dateTime.format(new Date(a.ts))}</td><td>${esc(a.user)}</td><td>${esc(a.action)}</td>
         <td>${esc(a.name)} <span class="muted">(${a.kind === "badge" ? "badge" : a.kind === "deur" ? "deur" : "code"})</span></td><td class="muted">${esc((a.doors || []).join(", "))}</td>
@@ -1151,7 +1513,7 @@ class VtoCodes extends VtoBase {
     $("cancel").addEventListener("click", () => this._closeForm());
     draw();
     p.classList.add("on");
-    p.scrollIntoView({ block: "nearest" });
+    if (!this._mobile) p.scrollIntoView({ block: "nearest" });
   }
   _tzOffset(localIso) {
     // verschil tussen de gegeven lokale tijd (tijdzone van Home Assistant) en UTC, in ms
@@ -1204,7 +1566,7 @@ class VtoCodes extends VtoBase {
     if ($("s_native")) $("s_native").addEventListener("click", () => navigator.share({ text: $("stext").value }).catch(() => {}));
     $("cancel").addEventListener("click", () => this._closeForm());
     p.classList.add("on");
-    p.scrollIntoView({ block: "nearest" });
+    if (!this._mobile) p.scrollIntoView({ block: "nearest" });
   }
   _openForm(type, e, act, text) {
     if (!this._data) return this._message("De codes zijn nog niet geladen.");
@@ -1315,7 +1677,7 @@ class VtoCodes extends VtoBase {
     }
     p.querySelector("#cancel").addEventListener("click", () => this._closeForm());
     p.classList.add("on");
-    p.scrollIntoView({ block: "nearest" });
+    if (!this._mobile) p.scrollIntoView({ block: "nearest" });
   }
   _closeForm() {
     const p = this.shadowRoot.getElementById("panel");
@@ -1440,24 +1802,24 @@ const HELP_DOC = {
   hint: "bv. tijdelijke code of badge",
   tasks: [
     { icon: "mdi:timer-outline", title: "Tijdelijke code geven", sub: "Pakket, technicus of gast", tab: "codes", tabName: "Codes en badges",
-      steps: ["Open <b>Codes en badges</b> en klik op <b>Tijdelijke code</b>.", "Kies <b>Pakket</b>, <b>Technicus</b>, <b>Gast</b> of <b>Andere</b>; pas de naam aan, bv. \"Pakket bol\".", "Vink de deur of deuren aan (je laatste keuze wordt onthouden).", "Kies hoe lang: 1 uur, Vandaag, 24 uur, 3 dagen, 1 week, of <b>Van … tot …</b> voor een eigen begin en einde (bv. vanaf de dag van de Gevelparade).", "Laat <b>Eenmalig</b> aan voor een pakket: na de eerste opening vervalt de code.", "Klik op <b>Maak code en deel</b> en kies WhatsApp, Sms, Mail of Kopieer tekst."],
+      steps: ["Klik op <b>Tijdelijke code</b> in Codes en badges. Op de gsm: de oranje knop <b>Tijdelijke code</b> rechtsonder, op elk tabblad.", "Kies <b>Pakket</b>, <b>Technicus</b>, <b>Gast</b> of <b>Andere</b>; pas de naam aan, bv. \"Pakket bol\".", "Vink de deur of deuren aan (je laatste keuze wordt onthouden).", "Kies hoe lang: 1 uur, Vandaag, 24 uur, 3 dagen, 1 week, of <b>Van … tot …</b> voor een eigen begin en einde (bv. vanaf de dag van de Gevelparade).", "Laat <b>Eenmalig</b> aan voor een pakket: na de eerste opening vervalt de code.", "Klik op <b>Maak code en deel</b> en kies WhatsApp, Sms, Mail of Kopieer tekst."],
       tip: "Home Assistant kiest zelf een willekeurige, vrije code van 6 cijfers. Na het einde gaat ze vanzelf uit dienst. Alle lopende tijdelijke codes vind je terug in de tab Tijdelijk." },
     { icon: "mdi:account-key", title: "Vaste code toevoegen", sub: "Voor een medewerker of vrijwilliger", tab: "codes", tabName: "Codes en badges",
-      steps: ["Open <b>Codes en badges</b> en klik op <b>Nieuwe code</b>.", "Vul de naam en een code van 6 tot 8 cijfers in.", "Vink de deuren aan.", "Eventueel <b>Geldig vanaf</b> en <b>Geldig tot</b>; leeg = vanaf nu, zonder einde.", "Klik op <b>Opslaan</b> (10 tot 20 seconden) en deel de code in het venster dat opent."] },
+      steps: ["Open <b>Codes en badges</b> en klik op <b>Nieuwe code</b> (op de gsm: <b>Nieuw</b>, dan <b>Vaste code</b>).", "Vul de naam en een code van 6 tot 8 cijfers in.", "Vink de deuren aan.", "Eventueel <b>Geldig vanaf</b> en <b>Geldig tot</b>; leeg = vanaf nu, zonder einde.", "Klik op <b>Opslaan</b> (10 tot 20 seconden) en deel de code in het venster dat opent."] },
     { icon: "mdi:share-variant", title: "Een code (opnieuw) delen", sub: "WhatsApp, sms, mail of kopieer", tab: "codes", tabName: "Codes en badges",
-      steps: ["Zoek de persoon in <b>Codes en badges</b>.", "Klik op <b>Delen</b>.", "Pas de tekst eventueel aan en kies WhatsApp, Sms, Mail of Kopieer tekst. De ontvanger kies je daar zelf."],
+      steps: ["Zoek de persoon in <b>Codes en badges</b>.", "Klik op <b>Delen</b> (op de gsm: tik op de rij, dan <b>Delen</b>).", "Pas de tekst eventueel aan en kies WhatsApp, Sms, Mail of Kopieer tekst. De ontvanger kies je daar zelf."],
       tip: "De tekst vermeldt de deur(en), de geldigheid en hoe je opent: # code #." },
     { icon: "mdi:lock-clock", title: "Iemand tijdelijk blokkeren", sub: "Tot een datum of tot je deblokkeert", tab: "codes", tabName: "Codes en badges",
-      steps: ["Zoek de persoon en klik op <b>Blokkeren</b>.", "Kies <b>Tot</b> een datum en uur, of <b>Tot ik deblokkeer</b>.", "Klik op <b>Blokkeren</b>: de code of badge werkt meteen niet meer.", "Met een einddatum komt ze vanzelf terug; anders klik je later op <b>Deblokkeren</b>."] },
+      steps: ["Zoek de persoon en klik op <b>Blokkeren</b> (op de gsm: tik op de rij).", "Kies <b>Tot</b> een datum en uur, of <b>Tot ik deblokkeer</b>.", "Klik op <b>Blokkeren</b>: de code of badge werkt meteen niet meer.", "Met een einddatum komt ze vanzelf terug; anders klik je later op <b>Deblokkeren</b>."] },
     { icon: "mdi:account-cancel", title: "Iemand de toegang afnemen", sub: "Uit dienst, later herstelbaar", tab: "codes", tabName: "Codes en badges",
-      steps: ["Zoek de persoon en klik op <b>Uit dienst</b>.", "Bevestig. De code of badge wordt van alle deuren gehaald en bewaard.", "Terug nodig? Tab <b>Uit dienst</b>, klik op <b>Herstellen</b>. Definitief weg: <b>Definitief verwijderen</b>."] },
+      steps: ["Zoek de persoon en klik op <b>Uit dienst</b> (op de gsm: tik op de rij, dan <b>Uit dienst zetten</b> onderaan in rood).", "Bevestig. De code of badge wordt van alle deuren gehaald en bewaard.", "Terug nodig? Tab <b>Uit dienst</b>, klik op <b>Herstellen</b>. Definitief weg: <b>Definitief verwijderen</b>."] },
     { icon: "mdi:card-account-details-outline", title: "Nieuwe badge registreren", sub: "Badge voor de lezer houden en kiezen", tab: "codes", tabName: "Codes en badges",
-      steps: ["Hou de nieuwe badge tegen een lezer. Ze wordt geweigerd; dat is de bedoeling.", "Klik op <b>Nieuwe badge</b>. Het nummer staat bij Onlangs geweigerd; klik erop.", "Vul de naam in, vink de deuren aan en klik op <b>Opslaan</b>."] },
+      steps: ["Hou de nieuwe badge tegen een lezer. Ze wordt geweigerd; dat is de bedoeling.", "Klik op <b>Nieuwe badge</b> (op de gsm: <b>Nieuw</b>, dan <b>Badge</b>). Het nummer staat bij Onlangs geweigerd; klik erop.", "Vul de naam in, vink de deuren aan en klik op <b>Opslaan</b>."] },
     { icon: "mdi:door-open", title: "Deur openen op afstand", sub: "Vanop de pagina Overzicht", tab: "overzicht", tabName: "Overzicht",
       steps: ["Open <b>Overzicht</b>.", "Klik bij de juiste deur op <b>Deur openen</b>.", "De knop wordt rood: klik binnen 6 seconden nog eens.", "\"... is geopend.\" verschijnt. In de historiek staat Op afstand met je naam."],
       tip: "Enkel voor beheerders. Elke opening op afstand staat bij Wijzigingen." },
     { icon: "mdi:history", title: "Nagaan wie binnenkwam", sub: "Zoeken, per persoon, CSV", tab: "historiek", tabName: "Historiek",
-      steps: ["Open <b>Historiek</b>.", "Zoek op naam of kies een deur, geopend of geweigerd, en een periode.", "Klik op <b>Per persoon</b> voor een overzicht per persoon; klik op een naam om te filteren.", "Klik op <b>Per dag</b> voor een lijst per dag (toegangen, geopend, geweigerd, personen, eerste en laatste, per deur); klik op een dag voor alle toegangen van die dag. Het kruisje bij Dag wist die filter.", "Het camera-icoon in de laatste kolom opent de foto van die toegang. <b>CSV</b> geeft alles voor Excel."] },
+      steps: ["Open <b>Historiek</b>.", "Zoek op naam of kies een deur, geopend of geweigerd, en een periode. Op de gsm staan deur, resultaat, periode en CSV achter de knop <b>Filters</b>; actieve filters staan eronder als blauwe knopjes, tik erop om ze te wissen.", "Klik op <b>Per persoon</b> voor een overzicht per persoon; klik op een naam om te filteren.", "Klik op <b>Per dag</b> voor een lijst per dag (toegangen, geopend, geweigerd, personen, eerste en laatste, per deur); klik op een dag voor alle toegangen van die dag. Het kruisje bij Dag wist die filter.", "Het camera-icoon in de laatste kolom opent de foto van die toegang. <b>CSV</b> geeft alles voor Excel."] },
   ],
   topics: [
     { title: "Overzicht", sub: "Status per deur, laatste toegang, deur openen", html: hpTable([["Kaart per deur", "Online of Offline, laatste toegang (wie, hoe, wanneer) met foto, aantallen van vandaag, codes en badges"], ["Deur openen", "Enkel beheerders, met bevestiging"], ["Recente toegangen", "De laatste 6 van die deur: tijd (vandaag enkel het uur), naam, icoon voor de methode, vinkje geopend of kruisje geweigerd, camera voor de foto. Ga met de muis over een rij voor alle details, of tik op de rij om de volledige naam te zien"]]) },
@@ -1465,6 +1827,7 @@ const HELP_DOC = {
     { title: "Codes en badges", sub: "Statussen en knoppen", html: hpTable([["Alles (tab)", "Eerste tab: alle codes en badges, ook uit dienst"], ["Code tonen", "Klik op de puntjes om die ene code te zien, nog eens klikken verbergt ze; Codes tonen toont ze allemaal"], ["Actief", "Staat op de toestellen en werkt"], ["Tijdelijk (tab)", "Alle codes met een geldigheid of eenmalig gebruik die nog niet uit dienst zijn, ook de wachtende"], ["Wacht op begin", "Geldigheid begint later; komt er vanzelf op (of Nu al activeren)"], ["Geblokkeerd", "Tijdelijk van de toestellen, tot een tijdstip of tot deblokkeren"], ["Uit dienst", "Van de toestellen, bewaard en herstelbaar"], ["Eenmalig", "Vervalt na de eerste opening"], ["Wijzigingen", "Onderaan: wie wat wanneer deed, ook de planner en openen op afstand"]]) },
     { title: "Aan de deur", sub: "Hoe open je", html: hpTable([["Code", "Typ <b># code #</b> op het klavier"], ["Badge", "Hou de badge tegen de lezer"], ["Binnenpost", "Opentoets op de binnenpost"]]) },
     { title: "Foto's", sub: "Bij elke toegang, 30 dagen", html: `<p>Bij elke toegang neemt Home Assistant een foto met de camera van de buitenpost. Enkel beheerders zien ze. Na 30 dagen worden ze gewist: de Belgische camerawet laat camerabeelden maximaal een maand bewaren, tenzij als bewijs nodig. Kammerstraat maakt nog geen foto's (camera moet ter plaatse aangezet worden).</p>` },
+    { title: "Op de gsm", sub: "Zelfde mogelijkheden, ander uitzicht", html: hpTable([["Oranje knop", "<b>Tijdelijke code</b> rechtsonder op Overzicht, Historiek en Codes en badges"], ["Codes en badges", "Een rij per code of badge, zonder knoppen. Tik op de rij voor Code tonen, Delen, Aanpassen, Blokkeren, Geschiedenis; Uit dienst staat apart onderaan in rood. <b>Nieuw</b> voor een vaste code of badge. Filters als schuifbare rij bovenaan, met Codes en Badges achteraan"], ["Historiek", "Lijst per dag (Vandaag, Gisteren, ...): uur, naam, deur en manier, foto. Tik op een rij voor alle toegangen van die persoon. Filters achter de knop <b>Filters</b>, grafiek ingeklapt"], ["Overzicht", "Per deur de cijfers van vandaag, de laatste 6 toegangen, <b>Alles in Historiek</b> en een grote knop Deur openen (twee keer tikken)"], ["Wijzigingen", "Onderaan, ingeklapt; tik om te tonen"], ["Wanneer", "Zodra de kaart smaller is dan 600 pixels; op een computer blijft alles zoals voordien"]]) },
     { title: "Goed om te weten", sub: "Snelheid en veiligheid", html: hpTable([["Snelheid", "Een actie op een toestel duurt 10 tot 20 seconden"], ["Veiligheid", "Voor elke wijziging wordt het toestel nagekeken; klopt iets niet, dan gebeurt er niets"], ["Niets verloren", "Blokkeren en uit dienst bewaren eerst een kopie"], ["Archief", "Het toestel onthoudt 1000 toegangen; Home Assistant bewaart ze 400 dagen"]]) },
   ],
   terms: [
@@ -1495,7 +1858,7 @@ class VtoHandleiding extends VtoBase {
 // exist"). Daarom registreren we opnieuw zolang het nodig is, telkens via window.customElements
 // (het register dat NU actief is) en met een nieuwe subklasse (een constructor mag maar een keer).
 const CARD_CLASSES = [["btechnics-vto-overzicht", VtoOverzicht], ["btechnics-vto-toegang", VtoToegang], ["btechnics-vto-codes", VtoCodes], ["btechnics-vto-handleiding", VtoHandleiding]];
-const CARDS_VERSION = "0.9.0";
+const CARDS_VERSION = "0.9.1";
 const define = (name, cls) => {
   if (window.customElements.get(name)) return;
   try {
