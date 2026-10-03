@@ -533,9 +533,12 @@ class Manager:
 
     @staticmethod
     def _expired(m, now) -> bool:
+        # uit dienst maar nog op een deur (die deur was offline bij het stoppen of bij het einde): opnieuw proberen,
+        # ook zonder einddatum, anders blijft de code daar werken
+        if m.get("status") == "retired" and m.get("doors"):
+            return True
         vu = dt_util.parse_datetime(m["valid_until"]) if m.get("valid_until") else None
-        # ook uit dienst maar nog op een deur (die deur was offline bij het einde): opnieuw proberen
-        return vu is not None and vu <= now and (m.get("status") != "retired" or bool(m.get("doors")))
+        return vu is not None and vu <= now and m.get("status") != "retired"
 
     @staticmethod
     def _due(m, now) -> bool:
@@ -547,8 +550,9 @@ class Manager:
         m = self.reg.managed.get(cid)
         if m is None or not self._expired(m, dt_util.utcnow()):
             return None
-        vu = dt_util.parse_datetime(m["valid_until"])
-        return await self.block(cid, None, "planner", True, "einde geldigheid " + dt_util.as_local(vu).strftime("%d/%m/%Y %H:%M"), quiet)
+        vu = dt_util.parse_datetime(m["valid_until"]) if m.get("valid_until") else None
+        why = ("einde geldigheid " + dt_util.as_local(vu).strftime("%d/%m/%Y %H:%M")) if vu and vu <= dt_util.utcnow() else "opnieuw van de deur gehaald"
+        return await self.block(cid, None, "planner", True, why, quiet)
 
     async def _release(self, cid: str, quiet: bool):
         m = self.reg.managed.get(cid)
@@ -594,8 +598,11 @@ class Manager:
         if not d.get("opened") or not str(d.get("method", "")).startswith("code"):
             return
         name = d.get("name")
+        same = [cid for cid, m in self.reg.managed.items() if m.get("kind") == "code" and m.get("status") == "active" and m.get("name") == name]
+        if len(same) != 1:
+            return  # niet eenduidig welke code gebruikt werd: niets tellen (liever te lang dan iemand buitensluiten)
         for cid, m in self.reg.managed.items():
-            if m.get("kind") == "code" and m.get("max_uses") and m.get("status") == "active" and m.get("name") == name:
+            if cid in same and m.get("max_uses"):
                 m["uses"] = int(m.get("uses") or 0) + 1
                 if m["uses"] >= int(m["max_uses"]):
                     self.hass.async_create_task(self._used_up(cid))

@@ -15,6 +15,7 @@ const gev = [
   ['2026-03-29T01:30', '2026-03-29T00:30', 'dag van de zomertijd, voor de wissel'],
   ['2026-03-29T03:30', '2026-03-29T01:30', 'na de wissel naar zomertijd'],
   ['2026-10-01T23:59', '2026-10-01T21:59', 'einde van de dag'],
+  ['2026-03-29T02:30', '2026-03-29T01:30', 'uur dat niet bestaat: 02:30 wordt 03:30 zomertijd, zoals HA fold=0'],
 ];
 for (const [l, u, t] of gev) check(iso(x._localToMs(l)) === u, t, `${l} -> ${iso(x._localToMs(l))}`);
 for (const [l] of gev) { const ms = x._localToMs(l); check(x._localInput(ms) === l || l === '2026-03-29T02:30', 'heen en terug ' + l, x._localInput(ms)); }

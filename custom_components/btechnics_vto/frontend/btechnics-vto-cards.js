@@ -92,7 +92,7 @@ function accessRow(hass, f, x, o) {
   const lbl = x.name === "?" || isLabel(x.name);
   const sub = [o.door ? x.door : "", x.method + (x.card ? ` ${x.card}` : "")].filter(Boolean).join(" · ");
   const ph = photoBtn(hass, x, `${nm}, ${x.door}, ${f.dateTime.format(d)}`);
-  return `<div class="mrow" role="button" ${o.person === false ? "" : `data-person="${esc(x.name)}"`} title="${esc(`${nm}\n${f.dateTime.format(d)}\n${x.door}, ${x.method}\n${x.opened ? "Geopend" : "Geweigerd"}`)}">
+  return `<div class="mrow" ${o.person === false ? "" : `role="button" tabindex="0" data-person="${esc(x.name)}"`} title="${esc(`${nm}\n${f.dateTime.format(d)}\n${x.door}, ${x.method}\n${x.opened ? "Geopend" : "Geweigerd"}`)}">
     <span class="tm">${esc(o.date ? f.compact.format(d) : f.time.format(d))}</span>
     <span class="mt"><b class="${lbl ? "muted" : ""}">${esc(nm)}</b><span class="sub">${esc(sub)}${x.opened ? "" : ' · <span class="refusedtxt">geweigerd</span>'}</span></span>
     ${ph || `<span class="dotbox"><span class="dot ${x.opened ? "open" : "refused"}" title="${x.opened ? "Geopend" : "Geweigerd"}"></span></span>`}</div>`;
@@ -243,13 +243,36 @@ class VtoBase extends HTMLElement {
     this._config = config || {};
   }
   set hass(hass) {
-    const first = !this._hass;
     this._hass = hass;
     // na een scriptwissel kan _fmt nog van de oude versie zijn (zonder de nieuwe notaties)
     if (!this._fmt || !this._fmt.longDate) this._fmt = formatters(hass.config && hass.config.time_zone);
-    if (first) this._init();
-    else this._hassChanged();
+    // de rol (beheerder of niet) bepaalt wat de kaart toont: wachten tot de gebruiker gekend is,
+    // en opnieuw opbouwen als de rol verandert
+    if (!hass.user) return;
+    const adm = isAdmin(hass);
+    if (this._role === undefined || this._role !== adm) {
+      this._role = adm;
+      clearInterval(this._timer);
+      this._timer = null;
+      this._init();
+    } else this._hassChanged();
   }
+  connectedCallback() {
+    if (this._locL && !this._locOn) { window.addEventListener("location-changed", this._locL); this._locOn = true; }
+    if (!this._escL) this._escL = (e) => { if (e.key === "Escape") this._escape(); };
+    document.addEventListener("keydown", this._escL);
+  }
+  disconnectedCallback() {
+    if (this._locOn) { window.removeEventListener("location-changed", this._locL); this._locOn = false; }
+    if (this._escL) document.removeEventListener("keydown", this._escL);
+  }
+  // paginawissel naar dit dashboard: kijken of er een opdracht klaarstaat (bv. meteen een tijdelijke code)
+  _listenLoc() {
+    if (!this._locL) this._locL = () => setTimeout(() => this._checkIntent(), 400);
+    if (this.isConnected && !this._locOn) { window.addEventListener("location-changed", this._locL); this._locOn = true; }
+  }
+  _checkIntent() {}
+  _escape() {}
   get hass() {
     return this._hass;
   }
@@ -344,7 +367,8 @@ class VtoOverzicht extends VtoBase {
       ha-card.m .stat .l { min-height: 0; }
       ha-card.m table.recent td { height: 36px; vertical-align: middle; font-size: 0.95rem; }
       ha-card.m table.recent col.c5 { width: 44px; }
-      ha-card.m table.recent button.photo { width: 40px; height: 34px; border-radius: 8px; background: var(--secondary-background-color); }
+      ha-card.m table.recent td { height: 40px; }
+      ha-card.m table.recent button.photo { width: 40px; height: 40px; border-radius: 8px; background: var(--secondary-background-color); }
       ha-card.m table.recent button.photo ha-icon { --mdc-icon-size: 18px; }
       ha-card.m .opener { order: 9; flex-wrap: wrap; }
       ha-card.m .opener button.btn { width: 100%; justify-content: center; min-height: 48px; font-size: 1rem; font-weight: 500;
@@ -361,14 +385,16 @@ class VtoOverzicht extends VtoBase {
     if (fab) fab.addEventListener("click", () => goView(this._config.codes_view || "codes", { quick: 1 }));
     this._watchMode();
     this._load();
-    this._timer = setInterval(() => this._load(), 30000);
+    if (this.isConnected) this._timer = setInterval(() => this._load(), 30000);
   }
   disconnectedCallback() {
+    super.disconnectedCallback();
     clearInterval(this._timer);
     this._timer = null;
   }
   connectedCallback() {
-    if (this._hass && !this._timer) {
+    super.connectedCallback();
+    if (this._hass && this._role !== undefined && !this._timer) {
       this._load();
       this._timer = setInterval(() => this._load(), 30000);
     }
@@ -503,8 +529,14 @@ const PAGE = 50;
 
 class VtoToegang extends VtoBase {
   disconnectedCallback() {
+    super.disconnectedCallback();
     clearTimeout(this._deb);
     clearTimeout(this._retry);
+    clearTimeout(this._doorsRetry);
+  }
+  _escape() {
+    const fs = this.shadowRoot.getElementById("fs");
+    if (fs) fs.classList.remove("on");
   }
   _init() {
     if (!isAdmin(this._hass)) return this._initUser();
@@ -541,8 +573,7 @@ class VtoToegang extends VtoBase {
       .fs { display: contents; }
       .fs .fl { font-size: 0.85rem; color: var(--secondary-text-color); margin: 6px 0 -4px; }
       /* gsm: filters achter een knop, actieve filters als chips, grafiek ingeklapt, lijst in plaats van tabel */
-      ha-card.m .filters { flex-wrap: nowrap; position: sticky; top: var(--header-height, 56px); z-index: 3; background: var(--card-background-color, #fff);
-        margin: -4px -12px 8px; padding: 4px 12px 8px; }
+      ha-card.m .filters { flex-wrap: nowrap; }
       ha-card.m .filters input[type=search] { min-width: 0; flex: 1 1 auto; min-height: 44px; }
       ha-card.m .fs { display: none; }
       ha-card.m .fs.on { display: flex; flex-direction: column; gap: 10px; }
@@ -552,7 +583,7 @@ class VtoToegang extends VtoBase {
       button.fbtn { position: relative; min-height: 44px; flex: none; }
       button.fbtn i { position: absolute; top: -6px; right: -6px; font-style: normal; font-size: 0.7rem; background: #ED6928; color: #fff; border-radius: 9px; padding: 0 6px; line-height: 18px; }
       .fchips { display: flex; gap: 6px; flex-wrap: wrap; margin: -2px 0 10px; }
-      .fchips button { border: 0; border-radius: 16px; padding: 6px 12px; background: var(--primary-color); color: var(--text-primary-color, #fff); font: inherit; font-size: 0.85rem; cursor: pointer; }
+      .fchips button { border: 0; border-radius: 20px; padding: 6px 14px; min-height: 40px; background: var(--primary-color); color: var(--text-primary-color, #fff); font: inherit; font-size: 0.85rem; cursor: pointer; }
       ha-card.m .personchip.on { min-height: 34px; }
       ha-card.m .filters .personchip { display: none; }
       ha-card.m .kpis { grid-template-columns: repeat(3, 1fr); gap: 6px; }
@@ -560,7 +591,7 @@ class VtoToegang extends VtoBase {
       ha-card.m .kpi:nth-child(4) { display: none; }
       ha-card.m #chart:not(.open) { display: none; }
       ha-card.m .tabs { background: var(--secondary-background-color); border-radius: 10px; padding: 3px; gap: 3px; }
-      ha-card.m .tabs .btn { flex: 1; border: 0; background: none; min-height: 38px; padding: 4px; }
+      ha-card.m .tabs .btn { flex: 1; border: 0; background: none; min-height: 40px; padding: 4px; }
       ha-card.m .tabs .btn.active { background: var(--card-background-color, #fff); color: var(--primary-text-color); font-weight: 500; box-shadow: 0 1px 3px rgba(0, 0, 0, 0.15); }
     </style>
     <ha-card>
@@ -651,15 +682,22 @@ class VtoToegang extends VtoBase {
     $("tdays").addEventListener("click", () => this._setView("days"));
     $("dclear").addEventListener("click", () => this._setDay(null));
     $("csv").addEventListener("click", () => this._csv());
-    this.shadowRoot.addEventListener("click", (e) => {
-      if (e.target.closest("[data-photo]")) return;
-      const b = e.target.closest("[data-person]");
-      if (b) this._setPerson(b.dataset.person);
-      const dd = e.target.closest("[data-day]");
-      if (dd) this._setDay(dd.dataset.day);
-    });
+    if (!this._wired) {
+      // een keer koppelen (ook na een scriptwissel die _init opnieuw draait)
+      this._wired = true;
+      const go = (e) => {
+        if (e.target.closest("[data-photo]")) return;
+        const b = e.target.closest("[data-person]");
+        if (b) this._setPerson(b.dataset.person);
+        const dd = e.target.closest("[data-day]");
+        if (dd) this._setDay(dd.dataset.day);
+      };
+      this.shadowRoot.addEventListener("click", go);
+      this.shadowRoot.addEventListener("keydown", (e) => { if ((e.key === "Enter" || e.key === " ") && e.target.matches(".mrow[tabindex]")) { e.preventDefault(); go(e); } });
+    }
     this._loadDoors();
     this._reload();
+    if (this._ro) this._ro.disconnect();
     this._ro = new ResizeObserver(() => {
       const w = Math.round(this.shadowRoot.getElementById("chart").clientWidth);
       if (this._res && w && Math.abs(w - (this._chartW || 0)) > 4) this._chart();
@@ -667,7 +705,7 @@ class VtoToegang extends VtoBase {
     this._ro.observe(this.shadowRoot.getElementById("chart"));
     this._watchMode();
     // Home Assistant houdt een bezochte pagina soms verbonden: ook bij elke paginawissel naar een opdracht kijken
-    if (!this._locL) { this._locL = () => setTimeout(() => this._checkIntent(), 400); window.addEventListener("location-changed", this._locL); }
+    this._listenLoc();
   }
   _initUser() {
     // gebruiker zonder beheerrechten: enkel aantallen per dag en per deur, geen namen, uren of foto's
@@ -701,12 +739,13 @@ class VtoToegang extends VtoBase {
     $("period").addEventListener("change", (e) => { this._user.period = e.target.value; this._loadUser(); });
     const it = takeIntent(c.view || "historiek");
     if (it && it.door) this._user.door = it.door;
-    this._ws({ type: "btechnics_vto/doors" }).then((d) => {
+    const doorsUser = () => this._ws({ type: "btechnics_vto/doors" }).then((d) => {
       $("door").innerHTML = `<option value="">Alle deuren</option>` + d.doors.map((x) => `<option value="${esc(x.id)}">${esc(x.name)}</option>`).join("");
       $("door").value = this._user.door;
-    }).catch(() => {});
+    }).catch(() => { clearTimeout(this._doorsRetry); this._doorsRetry = setTimeout(() => this.isConnected && doorsUser(), 10000); });
+    doorsUser();
     this._watchMode();
-    if (!this._locL) { this._locL = () => setTimeout(() => this._checkIntent(), 400); window.addEventListener("location-changed", this._locL); }
+    this._listenLoc();
     this._loadUser();
   }
   async _loadUser() {
@@ -738,6 +777,7 @@ class VtoToegang extends VtoBase {
             <td class="num">${d.refused ? `<span class="refusedtxt">${d.refused}</span>` : 0}</td><td class="muted">${doors(d)}</td></tr>`).join("")}</tbody></table>`;
   }
   connectedCallback() {
+    super.connectedCallback();
     this._checkIntent();
   }
   _checkIntent() {
@@ -757,6 +797,7 @@ class VtoToegang extends VtoBase {
     }
   }
   _modeChanged() {
+    this._escape();   // filtervenster van de gsm niet laten openstaan
     if (this._user) return this._renderUser();
     if (this._res) this._renderOut();
   }
@@ -1012,21 +1053,24 @@ class VtoToegang extends VtoBase {
     const v = this._state.view;
     if (v === "days") {
       const days = r.days || [];
-      out.innerHTML = days.length ? `<div class="mlist">${days.map((d) => `<div class="mrow" role="button" data-day="${esc(d.day)}">
+      out.innerHTML = days.length ? `<div class="mlist">${days.map((d) => `<div class="mrow" role="button" tabindex="0" data-day="${esc(d.day)}">
         <span class="mt"><b>${esc(f.date.format(new Date(`${d.day}T12:00:00Z`)))}</b>
         <span class="sub">${d.count} toegangen${d.refused ? `, <span class="refusedtxt">${d.refused} geweigerd</span>` : ""}, ${esc(f.time.format(new Date(d.first * 1000)))} tot ${esc(f.time.format(new Date(d.last * 1000)))}</span>
         <span class="sub">${d.doors.map((x) => `${esc(x.door)} ${x.count}`).join(", ")}</span></span>${chev}</div>`).join("")}</div>` : none;
       return;
     }
     if (v === "people") {
-      out.innerHTML = r.people.length ? `<div class="mlist">${r.people.map((p) => `<div class="mrow" role="button" data-person="${esc(p.name)}">
+      out.innerHTML = r.people.length ? `<div class="mlist">${r.people.map((p) => `<div class="mrow" role="button" tabindex="0" data-person="${esc(p.name)}">
         <span class="mt"><b class="${isLabel(p.name) || p.name === "?" ? "muted" : ""}">${p.name === "?" ? "Onbekende code" : esc(p.name)}</b>
         <span class="sub">${p.count} toegangen${p.refused ? `, <span class="refusedtxt">${p.refused} geweigerd</span>` : ""}, laatst ${esc(f.compact.format(new Date(p.last * 1000)))}</span>
         <span class="sub">${p.doors.map(esc).join(", ")}</span></span>${chev}</div>`).join("")}</div>` : none;
       return;
     }
     if (!r.rows.length) { out.innerHTML = none; return; }
-    const today = f.date.format(new Date()), yest = f.date.format(new Date(Date.now() - 86400000));
+    // gisteren in de tijdzone van Home Assistant (ook rond de wissel naar zomer- of wintertijd een dag van 23 of 25 uur)
+    const today = f.date.format(new Date());
+    let yest = today;
+    for (let h = 1; yest === today && h <= 48; h++) yest = f.date.format(new Date(Date.now() - h * 3600000));
     let last = "", html = "";
     for (const x of r.rows) {
       const d = new Date(x.ts * 1000), day = f.date.format(d);
@@ -1046,10 +1090,9 @@ class VtoToegang extends VtoBase {
     try {
       await this._csvExport();
     } catch (e) {
-      this.shadowRoot.getElementById("info").innerHTML = `<span class="error">CSV export mislukt: ${esc(e.message || e)}</span>`;
+      this.shadowRoot.getElementById("info").innerHTML = `<span class="error">CSV export mislukt: ${esc(errText(e))}</span>`;
     } finally {
       if (btn) btn.disabled = false;
-      this._busy = false;
     }
   }
   async _csvExport() {
@@ -1163,7 +1206,7 @@ class VtoCodes extends VtoBase {
       ha-card.m .bar #plus { min-height: 44px; flex: none; }
       ha-card.m .tabs { flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; margin: 0 -12px 8px; padding: 0 12px 2px; gap: 6px; }
       ha-card.m .tabs::-webkit-scrollbar { display: none; }
-      ha-card.m .tabs .btn { white-space: nowrap; border-radius: 18px; min-height: 36px; padding: 4px 14px; flex: none; }
+      ha-card.m .tabs .btn { white-space: nowrap; border-radius: 20px; min-height: 40px; padding: 4px 14px; flex: none; }
       ha-card.m .tabs .btn.active { background: var(--primary-color); color: var(--text-primary-color, #fff); border-color: var(--primary-color); }
       .tabs .tsep { flex: none; width: 1px; background: var(--divider-color); margin: 4px 2px; }
       .mrow .st { font-size: 0.85rem; }
@@ -1210,7 +1253,8 @@ class VtoCodes extends VtoBase {
     $("new").addEventListener("click", () => this._openForm("add", null));
     $("quick").addEventListener("click", () => this._openQuick());
     $("newbadge").addEventListener("click", () => this._openForm("addbadge", null));
-    this.shadowRoot.addEventListener("click", (e) => {
+    if (!this._wired) this.shadowRoot.addEventListener("click", (e) => {
+      const $ = (id) => this.shadowRoot.getElementById(id);
       const h = e.target.closest("[data-hist]");
       if (h) { if (this._mobile) this._closeForm(); return this._history(h.dataset.hist); }
       const rv = e.target.closest("[data-reveal]");
@@ -1239,28 +1283,38 @@ class VtoCodes extends VtoBase {
       const entry = this._data && this._data.entries.find((x) => x.id === b.dataset.id);
       this._action(b.dataset.act, entry);
     });
+    this._wired = true;
     this._watchMode();
-    if (!this._locL) { this._locL = () => setTimeout(() => this._checkIntent(), 400); window.addEventListener("location-changed", this._locL); }
+    this._listenLoc();
     this._load();
-    this._timer = setInterval(() => this._load(), 30000);
+    if (this.isConnected) this._timer = setInterval(() => this._load(), 30000);
   }
   disconnectedCallback() {
+    super.disconnectedCallback();
     clearInterval(this._timer);
     this._timer = null;
   }
   connectedCallback() {
-    if (this._hass && !this._timer) {
+    super.connectedCallback();
+    if (this._hass && this._role !== undefined && !this._timer) {
       this._load();
       this._timer = setInterval(() => this._load(), 30000);
     }
   }
   _modeChanged() {
+    // venster van de gsm (rij-acties, Nieuw) niet als paneel laten staan op een breed scherm
+    if (this._form && ["sheet", "new"].includes(this._form.type) && !this._busy) this._closeForm();
     if (this._data) this._render();
   }
+  _escape() {
+    if (this._busy) return;
+    if (this._form) this._closeForm();
+    if (this._hist && this._hist.name) this._closeHistory();
+  }
   _checkIntent() {
-    if (!this.isConnected || !this._data || this._form) return;
+    if (!this.isConnected || !this._data || this._busy) return;
     const it = takeIntent(this._config.view || "codes");
-    if (it && it.quick) this._openQuick();
+    if (it && it.quick) { this._closeForm(); this._closeHistory(); this._openQuick(); }
   }
   _toggleShow() {
     this._show = !this._show;
@@ -1322,8 +1376,7 @@ class VtoCodes extends VtoBase {
       this._data = await this._ws({ type: this._userMode ? "btechnics_vto/user/codes" : "btechnics_vto/manage/list" });
       this._render();
       // vanop een ander tabblad op de oranje knop gedrukt: meteen het formulier Tijdelijke code
-      const it = takeIntent(this._config.view || "codes");
-      if (it && it.quick) this._openQuick();
+      this._checkIntent();
     } catch (e) {
       const msg = e && e.code === "unauthorized" ? "Enkel beheerders kunnen de codes bekijken." : `Kon de codes niet laden: ${esc(errText(e))}`;
       this.shadowRoot.getElementById("out").innerHTML = `<div class="error">${msg}</div>`;
@@ -1640,6 +1693,11 @@ class VtoCodes extends VtoBase {
     if (alsUtc - o2 !== t) { const t2 = alsUtc - o2; if (this._localInput(t2) === iso.slice(0, 16)) t = t2; }
     const vroeger = t - 3600000;
     if (this._localInput(vroeger) === iso.slice(0, 16)) t = vroeger;
+    if (this._localInput(t) !== iso.slice(0, 16)) {
+      // uur dat niet bestaat (zomertijd, 02u00 tot 03u00): zoals Home Assistant met de afstand van vóór de wissel,
+      // 02u30 wordt dus 03u30
+      t = alsUtc - off(alsUtc - 6 * 3600000);
+    }
     return t;
   }
   _openShare(e, note) {
@@ -2004,7 +2062,7 @@ class VtoHandleiding extends VtoBase {
 // exist"). Daarom registreren we opnieuw zolang het nodig is, telkens via window.customElements
 // (het register dat NU actief is) en met een nieuwe subklasse (een constructor mag maar een keer).
 const CARD_CLASSES = [["btechnics-vto-overzicht", VtoOverzicht], ["btechnics-vto-toegang", VtoToegang], ["btechnics-vto-codes", VtoCodes], ["btechnics-vto-handleiding", VtoHandleiding]];
-const CARDS_VERSION = "0.10.0";
+const CARDS_VERSION = "0.10.1";
 const define = (name, cls) => {
   if (window.customElements.get(name)) return;
   try {
@@ -2063,7 +2121,14 @@ const upgrade = (name, cls) => {
       changed = true;
     } catch (e) { /* laat de oude versie staan */ }
   }
-  if (changed) reinit(name.toUpperCase());
+  if (changed) {
+    // de vorige scriptversie liet eigen klikverwerking achter die we niet kunnen weghalen (dubbele acties):
+    // een keer per versie de pagina herladen, anders de kaarten opnieuw opbouwen
+    let again = false;
+    try { again = sessionStorage.getItem("btxvto_reload") === CARDS_VERSION; if (!again) sessionStorage.setItem("btxvto_reload", CARDS_VERSION); } catch (e) { again = true; }
+    if (!again) { location.reload(); return; }
+    reinit(name.toUpperCase());
+  }
 };
 const registerAll = () => { for (const [name, cls] of CARD_CLASSES) { define(name, cls); upgrade(name, cls); } };
 registerAll();

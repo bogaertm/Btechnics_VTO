@@ -54,9 +54,10 @@ class LastUnlockSensor(_Base):
     @property
     def extra_state_attributes(self):
         # Zonder kaartnummers: attributen zijn leesbaar voor elke gebruiker, ook zonder beheerdersrechten.
-        hide = ("card", "name", "user")
-        u = {k: v for k, v in (self.coordinator.last_unlock or {}).items() if k not in hide}
-        return {**u, "recent": [{k: v for k, v in r.items() if k not in hide} for r in self.coordinator.recent]}
+        # enkel de laatste toegang zonder naam of kaartnummer; geen lijst met recente toegangen en uren
+        # (de kaarten halen die enkel voor beheerders op)
+        hide = ("card", "name", "user", "recent")
+        return {k: v for k, v in (self.coordinator.last_unlock or {}).items() if k not in hide}
 
 
 class CountSensor(_Base):

@@ -303,6 +303,18 @@ def _entry_out(cid, m, names):
     }
 
 
+def _user_error(e, connection) -> str:
+    """Foutmelding voor een gebruiker zonder beheerrechten: geen namen van anderen of technische details."""
+    txt = str(e)
+    if _admin(connection) or "tijdelijke codes" in txt or "verleden" in txt or "na het begin" in txt:
+        return txt
+    if "niet overal" in txt or "Nog actief" in txt:
+        return "niet op alle deuren gelukt (een toestel is niet bereikbaar); Home Assistant probeert het elke minuut opnieuw"
+    if "onbekende deur" in txt:
+        return "onbekende deur"
+    return "niet gelukt; probeer opnieuw of vraag het aan een beheerder"
+
+
 def _own_codes(mgr, uid):
     return [(cid, m) for cid, m in mgr.reg.managed.items() if m.get("kind") == "code" and m.get("owner") == uid]
 
@@ -326,6 +338,11 @@ def ws_user_codes(hass, connection, msg):
     doors = [{"id": did, "name": c.door_name} for did, c in sorted(coords.items(), key=lambda x: x[1].door_name.lower())]
     connection.send_result(msg["id"], {"doors": doors, "entries": entries, "audit": [], "unknown_cards": [], "admin": _admin(connection),
                                        "limits": {"active": USER_MAX_ACTIVE, "days": USER_MAX_DAYS, "ahead_days": USER_MAX_AHEAD_DAYS}})
+
+
+def _local_span(end, start):
+    """Duur op de klok van Home Assistant (7 dagen blijft 7 dagen, ook over de wissel naar zomer- of wintertijd)."""
+    return dt_util.as_local(end).replace(tzinfo=None) - dt_util.as_local(start).replace(tzinfo=None)
 
 
 def _local_dt(value: str):
@@ -368,7 +385,7 @@ async def ws_user_add(hass, connection, msg):
         err = "het einde ligt in het verleden"
     elif vfrom and vuntil <= vfrom:
         err = "het einde moet na het begin liggen"
-    elif vuntil - start > timedelta(days=USER_MAX_DAYS, minutes=1):
+    elif _local_span(vuntil, start) > timedelta(days=USER_MAX_DAYS, minutes=1):
         err = f"een tijdelijke code is maximaal {USER_MAX_DAYS} dagen geldig"
     elif vfrom and vfrom - now > timedelta(days=USER_MAX_AHEAD_DAYS):
         err = f"het begin mag maximaal {USER_MAX_AHEAD_DAYS} dagen vooruit liggen"
@@ -377,7 +394,10 @@ async def ws_user_add(hass, connection, msg):
     if err:
         connection.send_error(msg["id"], "failed", err)
         return
-    data = {"name": msg["name"].strip(), "doors": msg["doors"], "valid_until": vuntil}
+    # eigenaar en limiet gaan mee naar het toevoegen zelf: daar worden ze onder het schrijfslot nagekeken en gezet
+    # (twee gelijktijdige aanvragen kunnen de limiet zo niet samen overschrijden)
+    data = {"name": msg["name"].strip(), "doors": msg["doors"], "valid_until": vuntil,
+            "owner": connection.user.id, "owner_limit": USER_MAX_ACTIVE}
     if vfrom and vfrom > now:
         data["valid_from"] = vfrom
     if msg.get("max_uses"):
@@ -385,12 +405,9 @@ async def ws_user_add(hass, connection, msg):
     try:
         res = await ops["add"](SimpleNamespace(data=data, context=connection.context(msg)))
     except (HomeAssistantError, vol.Invalid) as e:
-        connection.send_error(msg["id"], "failed", str(e))
+        connection.send_error(msg["id"], "failed", _user_error(e, connection))
         return
     cid = res and res.get("id")
-    if cid in mgr.reg.managed:
-        mgr.reg.managed[cid]["owner"] = connection.user.id
-        await mgr.reg.save()
     connection.send_result(msg["id"], {"ok": True, "id": cid, "result": {"id": cid}})
 
 
@@ -406,13 +423,13 @@ async def ws_user_stop(hass, connection, msg):
     if m is None or ops is None or not connection.user or (m.get("owner") != connection.user.id and not _admin(connection)):
         connection.send_error(msg["id"], "not_found", "onbekende code")
         return
-    if m["status"] == "retired":
+    if m["status"] == "retired" and not m.get("doors"):
         connection.send_error(msg["id"], "failed", "deze code is al gestopt")
         return
     try:
         await ops["retire"](SimpleNamespace(data={"id": msg["entry"]}, context=connection.context(msg)))
     except (HomeAssistantError, vol.Invalid) as e:
-        connection.send_error(msg["id"], "failed", str(e))
+        connection.send_error(msg["id"], "failed", _user_error(e, connection))
         return
     connection.send_result(msg["id"], {"ok": True})
 

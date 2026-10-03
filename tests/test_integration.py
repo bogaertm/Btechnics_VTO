@@ -122,7 +122,7 @@ async def test_eerste_start_stille_baseline(hass, devices, events):
     assert events == []
     st = hass.states.get("sensor.vto_cafe_laatste_unlock")
     assert coord(hass, "cafe").last_unlock["name"] == "Oud999"
-    assert len(st.attributes["recent"]) == 50
+    assert len(coord(hass, "cafe").recent) == 50 and "recent" not in st.attributes
     assert coord(hass, "cafe").recent[0]["name"] == "Oud999"   # recentste eerst
     assert coord(hass, "cafe").recent[-1]["name"] == "Oud950"
 
@@ -140,7 +140,7 @@ async def test_nieuwe_toegang_bij_volle_buffer_wordt_gezien(hass, devices, event
     assert coord(hass, "cafe").last_unlock["name"] == "Eliot"
     assert len(logbook_calls) == 1
     assert logbook_calls[0]["entity_id"] == "sensor.vto_cafe_laatste_unlock"
-    assert "Eliot via code (geopend) op 25/09/2026 14:00:00" in logbook_calls[0]["message"]
+    assert logbook_calls[0]["message"] == "Geopend via code" and "Eliot" not in str(logbook_calls[0])   # Logboek is voor iedereen leesbaar
     # nog eens pollen zonder nieuwe records: niets dubbel
     await poll(hass, "cafe")
     assert len(events) == 1 and len(logbook_calls) == 1
@@ -254,7 +254,7 @@ async def test_lege_buffer_en_onbekende_methode(hass, devices, events):
     await setup_two_entries(hass)
     st = hass.states.get("sensor.vto_cafe_laatste_unlock")
     assert st.state == "unknown"
-    assert st.attributes["recent"] == []
+    assert coord(hass, "cafe").recent == [] and "recent" not in st.attributes
     cafe.add_log(T0, name="?", method=37, status=0)
     await poll(hass, "cafe")
     st = hass.states.get("sensor.vto_cafe_laatste_unlock")

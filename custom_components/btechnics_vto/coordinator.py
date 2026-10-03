@@ -267,15 +267,14 @@ class DoorCoordinator(DataUpdateCoordinator):
         entity_id = er.async_get(self.hass).async_get_entity_id("sensor", DOMAIN, f"{self.door_id}_last_unlock")
         if not entity_id:
             return
-        status = "geopend" if unlock["opened"] else "geweigerd"
-        when = dt_util.parse_datetime(unlock["time"])
-        when_txt = when.strftime("%d/%m/%Y %H:%M:%S") if when else unlock["time"]
+        # zonder naam: het Logboek is leesbaar voor elke gebruiker (namen enkel voor beheerders in de kaarten)
+        status = "Geopend" if unlock["opened"] else "Geweigerd"
         self.hass.async_create_task(
             self.hass.services.async_call(
                 "logbook", "log",
                 {
                     "name": f"VTO {unlock['door']}",
-                    "message": f"{unlock['name']} via {unlock['method']} ({status}) op {when_txt}",
+                    "message": f"{status} op afstand" if str(unlock.get("method", "")).startswith("op afstand") else f"{status} via {unlock['method']}",
                     "entity_id": entity_id,
                     "domain": DOMAIN,
                 },

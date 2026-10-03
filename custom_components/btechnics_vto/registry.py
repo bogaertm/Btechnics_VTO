@@ -103,6 +103,7 @@ class CodeRegistry:
         deuren verdwijnt). Records die nog nergens bij horen, komen bij een actieve ingang met dezelfde
         naam en code/badge die deze deur nog niet heeft, of worden een nieuwe ingang."""
         changed = False
+        gone = []   # weggevallen actieve ingangen: hun geldigheid en eigenaar niet verliezen als het record terugkomt
         for kind, recs in (("code", codes), ("badge", cards)):
             if recs is None:
                 continue
@@ -119,7 +120,7 @@ class CodeRegistry:
                     m["doors"].pop(door_id)
                     changed = True
                     if m["status"] == "active" and not m["doors"] and not m["stored"]:
-                        self.managed.pop(cid)
+                        gone.append(self.managed.pop(cid))
             taken = {int(m["doors"][door_id]) for m in self.managed.values() if m["kind"] == kind and door_id in m["doors"]}
             for recno, (name, sec) in sorted(present.items()):
                 if recno in taken:
@@ -130,7 +131,13 @@ class CodeRegistry:
                 if target is not None:
                     target["doors"][door_id] = recno
                 else:
-                    self._new(kind=kind, name=name, secret=sec, doors={door_id: recno}, source="toestel")
+                    nid = self._new(kind=kind, name=name, secret=sec, doors={door_id: recno}, source="toestel")
+                    old = next((g for g in gone if g["kind"] == kind and secret(g) == sec), None)
+                    if old is not None:
+                        for k in ("valid_from", "valid_until", "max_uses", "uses", "owner", "created"):
+                            if old.get(k) is not None:
+                                self.managed[nid][k] = old[k]
+                        self.managed[nid]["source"] = old.get("source", "toestel")
                 changed = True
         return changed
 

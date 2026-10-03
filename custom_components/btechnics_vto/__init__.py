@@ -462,7 +462,13 @@ def _register_services(hass: HomeAssistant):
         name = call.data["name"].strip()
         code = call.data.get("code") or _new_code(coords, reg)
         max_uses = call.data.get("max_uses")
-        if max_uses:
+        # enkel via websocket.py (gebruiker zonder beheerrechten); de service zelf kent dit veld niet
+        owner = call.data.get("owner")
+        limit = call.data.get("owner_limit")
+        if owner and limit and sum(1 for x in reg.managed.values()
+                                   if x.get("owner") == owner and x.get("status") != "retired") >= limit:
+            raise HomeAssistantError(f"je hebt al {limit} actieve tijdelijke codes; stop er eerst een")
+        if max_uses or owner:
             # het toestel meldt enkel de naam bij een opening: een beperkte code moet een unieke naam hebben
             names = {(m.get("name") or "").casefold() for m in reg.managed.values()}
             base, n = name, 2
@@ -487,6 +493,8 @@ def _register_services(hass: HomeAssistant):
             m.update(status="blocked", until=vfrom.isoformat(), valid_from=vfrom.isoformat(),
                      valid_until=vuntil.isoformat() if vuntil else None, max_uses=max_uses,
                      stored={did: {"UserID": name, "CommonPassword": code} for did in door_ids})
+            if owner:
+                m["owner"] = owner
             reg.log(user, "toegevoegd", m, mgr.door_names(door_ids), _add_detail(m))
             await reg.save()
             return {"id": cid, "doors": {}, "scheduled": True, "code": code}
@@ -526,6 +534,8 @@ def _register_services(hass: HomeAssistant):
                 # niet terug te draaien: toch registreren, zodat de code later via remove_code weg kan
                 sid = await reg.add(name, code, stuck)
                 reg.managed[sid].update(valid_until=vuntil.isoformat() if vuntil else None, max_uses=max_uses)
+                if owner:
+                    reg.managed[sid]["owner"] = owner
                 await reg.save()
                 msg += f" (code bleef staan op {', '.join(coords[d].door_name for d in stuck)}, id {sid})"
             if unknown:
@@ -536,6 +546,8 @@ def _register_services(hass: HomeAssistant):
             for did in door_ids:
                 await coords[did].async_refresh_codes()
         reg.managed[cid].update(valid_until=vuntil.isoformat() if vuntil else None, max_uses=max_uses)
+        if owner:
+            reg.managed[cid]["owner"] = owner
         reg.log(user, "toegevoegd", reg.managed[cid], mgr.door_names(doors), _add_detail(reg.managed[cid]))
         await reg.save()
         return {"id": cid, "doors": doors, "code": code}
@@ -640,6 +652,11 @@ def _register_services(hass: HomeAssistant):
                 await reg.update(cid, old_name, old_code, old_doors)
                 if new_doors:
                     extra = await reg.add(name, code, new_doors)
+                    # geldigheid, eenmalig gebruik en eigenaar meenemen: anders verloopt de nieuwe ingang nooit
+                    for k in ("valid_from", "valid_until", "max_uses", "uses", "owner"):
+                        if reg.managed[cid].get(k) is not None:
+                            reg.managed[extra][k] = reg.managed[cid][k]
+                    await reg.save()
                     _LOGGER.error("update_code %s gedeeltelijk uitgevoerd; gewijzigde deuren staan onder id %s", cid, extra)
             for did in want | set(orig):
                 if did in coords:

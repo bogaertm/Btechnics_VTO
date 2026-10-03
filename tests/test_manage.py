@@ -651,3 +651,65 @@ async def test_toestel_herstarten(hass, devices):
     res = await call(hass, "reboot", {"door": "Kammerstraat"}, True)
     assert res["reboot"] and getattr(kam, "reboots", 0) == 1
     assert reg(hass).audit[-1]["action"] == "toestel herstart"
+
+
+async def test_gebruiker_limiet_ook_bij_gelijktijdige_aanvragen(hass, devices, hass_ws_client, hass_read_only_access_token):
+    """Vijf aanvragen tegelijk met al 9 actieve codes: maar een enkele mag lukken (limiet onder het schrijfslot)."""
+    import asyncio
+    await setup_two_entries(hass)
+    await hass.async_block_till_done()
+    ro = await hass_ws_client(hass, hass_read_only_access_token)
+    until = (dt_util.now() + timedelta(hours=3)).strftime("%Y-%m-%dT%H:%M:%S")
+    for i in range(9):
+        await ro.send_json_auto_id({"type": f"{DOMAIN}/user/add", "name": f"Gast {i}", "doors": ["cafe"], "valid_until": until})
+        assert (await ro.receive_json())["success"]
+    clients = [await hass_ws_client(hass, hass_read_only_access_token) for _ in range(5)]
+    for i, c in enumerate(clients):
+        await c.send_json_auto_id({"type": f"{DOMAIN}/user/add", "name": f"Snel {i}", "doors": ["cafe"], "valid_until": until})
+    res = await asyncio.gather(*(c.receive_json() for c in clients))
+    assert sum(r["success"] for r in res) == 1
+    owner = next(m["owner"] for m in reg(hass).managed.values() if m.get("owner"))
+    assert sum(1 for m in reg(hass).managed.values() if m.get("owner") == owner and m["status"] != "retired") == 10
+
+
+async def test_gebruiker_zelfde_naam_wordt_uniek(hass, devices, hass_ws_client, hass_read_only_access_token):
+    """Een gebruiker kan niet de naam van iemand anders gebruiken (historiek en eenmalig tellen blijven eenduidig)."""
+    await setup_two_entries(hass)
+    await hass.async_block_till_done()
+    ro = await hass_ws_client(hass, hass_read_only_access_token)
+    until = (dt_util.now() + timedelta(hours=3)).strftime("%Y-%m-%dT%H:%M:%S")
+    await ro.send_json_auto_id({"type": f"{DOMAIN}/user/add", "name": "Adriaan", "doors": ["cafe"], "valid_until": until})
+    r = await ro.receive_json()
+    assert r["success"] and reg(hass).managed[r["result"]["id"]]["name"] == "Adriaan (2)"
+
+
+async def test_gestopt_maar_deur_offline_wordt_later_alsnog_gestopt(hass, devices, hass_ws_client, hass_read_only_access_token):
+    cafe, kam = devices
+    await setup_two_entries(hass)
+    await hass.async_block_till_done()
+    ro = await hass_ws_client(hass, hass_read_only_access_token)
+    until = (dt_util.now() + timedelta(days=2)).strftime("%Y-%m-%dT%H:%M:%S")
+    await ro.send_json_auto_id({"type": f"{DOMAIN}/user/add", "name": "Gast", "doors": ["cafe", "kammerstraat"], "valid_until": until})
+    cid = (await ro.receive_json())["result"]["id"]
+    name = reg(hass).managed[cid]["name"]
+    kam.offline = True
+    await ro.send_json_auto_id({"type": f"{DOMAIN}/user/stop", "entry": cid})
+    r = await ro.receive_json()
+    assert not r["success"] and "elke minuut" in r["error"]["message"] and "Kammerstraat" not in r["error"]["message"]
+    m = reg(hass).managed[cid]
+    assert m["status"] == "retired" and list(m["doors"]) == ["kammerstraat"] and on(cafe, name) == []
+    kam.offline = False
+    await hass.data[MANAGER_KEY]._tick()
+    m = reg(hass).managed[cid]
+    assert m["doors"] == {} and on(kam, name) == []
+
+
+def test_zeven_dagen_over_de_wissel_naar_wintertijd():
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+    from custom_components.btechnics_vto.websocket import _local_span
+    tz = ZoneInfo("Europe/Brussels")
+    dt_util.set_default_time_zone(tz)
+    a = datetime(2026, 10, 20, 12, 0, tzinfo=tz)
+    b = datetime(2026, 10, 27, 12, 0, tzinfo=tz)
+    assert _local_span(b, a) == timedelta(days=7)
