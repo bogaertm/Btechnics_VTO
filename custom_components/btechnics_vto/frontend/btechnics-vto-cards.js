@@ -1596,9 +1596,9 @@ class VtoCodes extends VtoBase {
     this._form = { type: "quick" };
     let saved = [];
     try { saved = JSON.parse(localStorage.getItem("btxvto_quick_doors") || "[]"); } catch (err) { saved = []; }
-    const TYPES = [["Pakket", "24", 1], ["Technicus", "today", 0], ["Gast", "3d", 0], ["Andere", "24", 0]];
+    const TYPES = [["Pakket", "24"], ["Technicus", "today"], ["Gast", "3d"], ["Andere", "24"]];
     const DUR = [["1", "1 uur"], ["today", "Vandaag"], ["24", "24 uur"], ["3d", "3 dagen"], ["7d", "1 week"], ["custom", "Van … tot …"]];
-    const st = { type: "Pakket", dur: "24", once: true };
+    const st = { type: "Pakket", dur: "24" };   // geen optie Eenmalig meer (keuze Matthias 03/10)
     const day = () => { const x = this._localInput(Date.now()); return `${Number(x.slice(8, 10))}/${Number(x.slice(5, 7))}`; };
     p.innerHTML = `<h3>Tijdelijke code</h3>
       <div class="row" id="qtype">${TYPES.map(([t]) => `<button class="btn" data-qt="${t}">${t}</button>`).join("")}</div>
@@ -1607,7 +1607,6 @@ class VtoCodes extends VtoBase {
       <div class="row">Deuren: ${doors.map((d) => `<label><input type="checkbox" class="qd" value="${esc(d.id)}" ${saved.includes(d.id) || (!saved.length && d === doors[0]) ? "checked" : ""}> ${esc(d.name)}</label>`).join("")}</div>
       <div class="row" id="qdur">Geldig: ${DUR.map(([k, l]) => `<button class="btn" data-qd="${k}">${l}</button>`).join("")}</div>
       <div class="row" id="qcustom" style="display:none"><label>Van <input id="vfrom" type="datetime-local"></label><label>Tot <input id="vuntil" type="datetime-local"></label><span class="muted">Belgische tijd (tijdzone van Home Assistant). Laat Van leeg om meteen te starten.</span></div>
-      <div class="row"><label><input type="checkbox" id="qonce"> Eenmalig: na de eerste opening gaat de code vanzelf uit dienst</label></div>
       <div class="row muted" id="qsum"></div>
       <div class="row"><button class="btn primary" id="ok">Maak code en deel</button><button class="btn" id="cancel">Annuleren</button></div>`;
     const $ = (id) => p.querySelector("#" + id);
@@ -1628,15 +1627,14 @@ class VtoCodes extends VtoBase {
       p.querySelectorAll("[data-qt]").forEach((b) => b.classList.toggle("active", b.dataset.qt === st.type));
       p.querySelectorAll("[data-qd]").forEach((b) => b.classList.toggle("active", b.dataset.qd === st.dur));
       $("qcustom").style.display = st.dur === "custom" ? "flex" : "none";
-      $("qonce").checked = st.once;
       if (!nameTouched) $("qname").value = `${st.type} ${day()}`;
       const u = until();
       const f = st.dur === "custom" && $("vfrom").value ? ($("vfrom").value.length === 16 ? $("vfrom").value + ":00" : $("vfrom").value) : "";
       const toon = (x) => this._fmt.dateTime.format(new Date(this._localToMs(x)));
-      $("qsum").textContent = u ? `Geldig ${f ? `van ${toon(f)} ` : ""}tot ${toon(u)}${st.once ? ", eenmalig" : ""}. Home Assistant kiest een willekeurige code van 6 cijfers.` : "Kies tot wanneer de code geldig is.";
+      $("qsum").textContent = u ? `Geldig ${f ? `van ${toon(f)} ` : ""}tot ${toon(u)}. Home Assistant kiest een willekeurige code van 6 cijfers.` : "Kies tot wanneer de code geldig is.";
     };
     p.querySelectorAll("[data-qt]").forEach((b) => b.addEventListener("click", () => {
-      const t = TYPES.find((x) => x[0] === b.dataset.qt); st.type = t[0]; st.dur = t[1]; st.once = !!t[2]; draw();
+      const t = TYPES.find((x) => x[0] === b.dataset.qt); st.type = t[0]; st.dur = t[1]; draw();
     }));
     p.querySelectorAll("[data-qd]").forEach((b) => b.addEventListener("click", () => {
       st.dur = b.dataset.qd;
@@ -1648,7 +1646,6 @@ class VtoCodes extends VtoBase {
       }
       draw();
     }));
-    $("qonce").addEventListener("change", (ev) => { st.once = ev.target.checked; draw(); });
     ["vfrom", "vuntil"].forEach((id) => $(id).addEventListener("input", draw));
     $("ok").addEventListener("click", () => {
       const name = $("qname").value.trim();
@@ -1665,7 +1662,6 @@ class VtoCodes extends VtoBase {
       try { localStorage.setItem("btxvto_quick_doors", JSON.stringify(sel)); } catch (err) { /* niet erg */ }
       const msg = { action: "add", name, doors: sel, valid_until: vu };
       if (vf) msg.valid_from = vf;
-      if (st.once) msg.max_uses = 1;
       this._run(msg, "Tijdelijke code gemaakt", (res) => {
         const id = res && res.result && res.result.id;
         const ne = id && this._data.entries.find((x) => x.id === id);
@@ -1983,7 +1979,7 @@ const HELP_DOC = {
   hint: "bv. tijdelijke code of badge",
   tasks: [
     { icon: "mdi:timer-outline", title: "Tijdelijke code geven", sub: "Pakket, technicus of gast", tab: "codes", tabName: "Codes en badges",
-      steps: ["Klik op <b>Tijdelijke code</b> in Codes en badges. Op de gsm: de oranje knop <b>Tijdelijke code</b> rechtsonder, op elk tabblad.", "Kies <b>Pakket</b>, <b>Technicus</b>, <b>Gast</b> of <b>Andere</b>; pas de naam aan, bv. \"Pakket bol\".", "Vink de deur of deuren aan (je laatste keuze wordt onthouden).", "Kies hoe lang: 1 uur, Vandaag, 24 uur, 3 dagen, 1 week, of <b>Van … tot …</b> voor een eigen begin en einde (bv. vanaf de dag van de Gevelparade).", "Laat <b>Eenmalig</b> aan voor een pakket: na de eerste opening vervalt de code.", "Klik op <b>Maak code en deel</b> en kies WhatsApp, Sms, Mail of Kopieer tekst."],
+      steps: ["Klik op <b>Tijdelijke code</b> in Codes en badges. Op de gsm: de oranje knop <b>Tijdelijke code</b> rechtsonder, op elk tabblad.", "Kies <b>Pakket</b>, <b>Technicus</b>, <b>Gast</b> of <b>Andere</b>; pas de naam aan, bv. \"Pakket bol\".", "Vink de deur of deuren aan (je laatste keuze wordt onthouden).", "Kies hoe lang: 1 uur, Vandaag, 24 uur, 3 dagen, 1 week, of <b>Van … tot …</b> voor een eigen begin en einde (bv. vanaf de dag van de Gevelparade).", "Klik op <b>Maak code en deel</b> en kies WhatsApp, Sms, Mail of Kopieer tekst."],
       tip: "Home Assistant kiest zelf een willekeurige, vrije code van 6 cijfers. Na het einde gaat ze vanzelf uit dienst. Alle lopende tijdelijke codes vind je terug in de tab Tijdelijk." },
     { icon: "mdi:account-key", title: "Vaste code toevoegen", sub: "Voor een medewerker of vrijwilliger", tab: "codes", tabName: "Codes en badges",
       steps: ["Open <b>Codes en badges</b> en klik op <b>Nieuwe code</b> (op de gsm: <b>Nieuw</b>, dan <b>Vaste code</b>).", "Vul de naam en een code van 6 tot 8 cijfers in.", "Vink de deuren aan.", "Eventueel <b>Geldig vanaf</b> en <b>Geldig tot</b>; leeg = vanaf nu, zonder einde.", "Klik op <b>Opslaan</b> (10 tot 20 seconden) en deel de code in het venster dat opent."] },
@@ -2005,7 +2001,7 @@ const HELP_DOC = {
   topics: [
     { title: "Overzicht", sub: "Status per deur, laatste toegang, deur openen", html: hpTable([["Kaart per deur", "Online of Offline, laatste toegang (wie, hoe, wanneer) met foto, aantallen van vandaag, codes en badges"], ["Deur openen", "Enkel beheerders, met bevestiging"], ["Gebruikers", "Zien enkel de status en de aantallen van vandaag"], ["Recente toegangen", "De laatste 6 van die deur: tijd (vandaag enkel het uur), naam, icoon voor de methode, vinkje geopend of kruisje geweigerd, camera voor de foto. Ga met de muis over een rij voor alle details, of tik op de rij om de volledige naam te zien"]]) },
     { title: "Historiek", sub: "Toegangen van het laatste jaar", html: `<p>Filters: zoeken, deur, status, periode (vandaag tot 1 jaar of eigen). Weergave Toegangen, Per persoon of Per dag. CSV voor Excel.</p>` + hpTable([["Binnenpost 9901, 9902, 9903", "Geopend via die binnenpost"], ["Op afstand", "Geopend met Deur openen; bij Hoe staat wie"], ["Foute code", "Een code die niet bestaat of niet geldig is voor die deur"], ["Onbekende badge", "Een badge die niet gekend is"], ["Ongeldige invoer", "Onvolledige invoer op het klavier"], ["Exitknop", "Geopend met de knop binnen"]]) },
-    { title: "Codes en badges", sub: "Statussen en knoppen", html: hpTable([["Alles (tab)", "Eerste tab: alle codes en badges, ook uit dienst"], ["Code tonen", "Klik op de puntjes om die ene code te zien, nog eens klikken verbergt ze; Codes tonen toont ze allemaal"], ["Actief", "Staat op de toestellen en werkt"], ["Tijdelijk (tab)", "Alle codes met een geldigheid of eenmalig gebruik die nog niet uit dienst zijn, ook de wachtende"], ["Wacht op begin", "Geldigheid begint later; komt er vanzelf op (of Nu al activeren)"], ["Geblokkeerd", "Tijdelijk van de toestellen, tot een tijdstip of tot deblokkeren"], ["Uit dienst", "Van de toestellen, bewaard en herstelbaar"], ["Eenmalig", "Vervalt na de eerste opening"], ["Wijzigingen", "Onderaan: wie wat wanneer deed, ook de planner en openen op afstand"]]) },
+    { title: "Codes en badges", sub: "Statussen en knoppen", html: hpTable([["Alles (tab)", "Eerste tab: alle codes en badges, ook uit dienst"], ["Code tonen", "Klik op de puntjes om die ene code te zien, nog eens klikken verbergt ze; Codes tonen toont ze allemaal"], ["Actief", "Staat op de toestellen en werkt"], ["Tijdelijk (tab)", "Alle codes met een geldigheid of eenmalig gebruik die nog niet uit dienst zijn, ook de wachtende"], ["Wacht op begin", "Geldigheid begint later; komt er vanzelf op (of Nu al activeren)"], ["Geblokkeerd", "Tijdelijk van de toestellen, tot een tijdstip of tot deblokkeren"], ["Uit dienst", "Van de toestellen, bewaard en herstelbaar"], ["Eenmalig", "Enkel nog bij oudere codes: vervalt na de eerste opening"], ["Wijzigingen", "Onderaan: wie wat wanneer deed, ook de planner en openen op afstand"]]) },
     { title: "Aan de deur", sub: "Hoe open je", html: hpTable([["Code", "Typ <b># code #</b> op het klavier"], ["Badge", "Hou de badge tegen de lezer"], ["Binnenpost", "Opentoets op de binnenpost"]]) },
     { title: "Foto's", sub: "Bij elke toegang, 30 dagen", html: `<p>Bij elke toegang neemt Home Assistant een foto met de camera van de buitenpost. Enkel beheerders zien ze. Na 30 dagen worden ze gewist: de Belgische camerawet laat camerabeelden maximaal een maand bewaren, tenzij als bewijs nodig. Kammerstraat maakt nog geen foto's (camera moet ter plaatse aangezet worden).</p>` },
     { title: "Rechten", sub: "Wat ziet een gebruiker zonder beheerrechten", html: `<p>Beheerders zijn de gebruikers met de optie Beheerder in Home Assistant (Instellingen, Personen). Alle anderen zijn gebruikers.</p>` + RIGHTS_TABLE },
@@ -2025,7 +2021,7 @@ const HELP_USER = {
   hint: "bv. tijdelijke code",
   tasks: [
     { icon: "mdi:timer-outline", title: "Tijdelijke code maken en delen", sub: "Pakket, technicus of gast", tab: "codes", tabName: "Tijdelijke codes",
-      steps: ["Klik op <b>Tijdelijke code</b>. Op de gsm: de oranje knop rechtsonder, op elk tabblad.", "Kies <b>Pakket</b>, <b>Technicus</b>, <b>Gast</b> of <b>Andere</b>; pas de naam aan, bv. \"Pakket bol\".", "Vink de deur of deuren aan.", "Kies hoe lang: 1 uur, Vandaag, 24 uur, 3 dagen, 1 week, of <b>Van … tot …</b> (maximaal 7 dagen).", "Laat <b>Eenmalig</b> aan voor een pakket.", "Klik op <b>Maak code en deel</b> en kies WhatsApp, Sms, Mail of Kopieer tekst."],
+      steps: ["Klik op <b>Tijdelijke code</b>. Op de gsm: de oranje knop rechtsonder, op elk tabblad.", "Kies <b>Pakket</b>, <b>Technicus</b>, <b>Gast</b> of <b>Andere</b>; pas de naam aan, bv. \"Pakket bol\".", "Vink de deur of deuren aan.", "Kies hoe lang: 1 uur, Vandaag, 24 uur, 3 dagen, 1 week, of <b>Van … tot …</b> (maximaal 7 dagen).", "Klik op <b>Maak code en deel</b> en kies WhatsApp, Sms, Mail of Kopieer tekst."],
       tip: "Home Assistant kiest de code. Je kan maximaal 10 tijdelijke codes tegelijk actief hebben. Alles wat je doet komt met je naam bij de beheerders." },
     { icon: "mdi:share-variant", title: "Een tijdelijke code opnieuw delen", sub: "Zolang ze loopt", tab: "codes", tabName: "Tijdelijke codes",
       steps: ["Open <b>Tijdelijke codes</b>.", "Klik bij de code op <b>Delen</b> (op de gsm: tik op de rij, dan <b>Delen</b>).", "Kies WhatsApp, Sms, Mail of Kopieer tekst."], tip: "De code zelf staat enkel in de deeltekst." },
@@ -2038,7 +2034,7 @@ const HELP_USER = {
     { title: "Wat mag ik als gebruiker?", sub: "Rechten in een tabel", html: RIGHTS_TABLE },
     { title: "Aan de deur", sub: "Hoe open je", html: hpTable([["Code", "Typ <b># code #</b> op het klavier"], ["Badge", "Hou de badge tegen de lezer"]]) },
   ],
-  terms: [["Tijdelijke code", "Code van 6 cijfers met een begin en einde; na het einde werkt ze vanzelf niet meer"], ["Eenmalig", "Vervalt na de eerste opening"], ["Stoppen", "De code werkt meteen niet meer"]],
+  terms: [["Tijdelijke code", "Code van 6 cijfers met een begin en einde; na het einde werkt ze vanzelf niet meer"], ["Stoppen", "De code werkt meteen niet meer"]],
 };
 
 class VtoHandleiding extends VtoBase {
@@ -2062,7 +2058,7 @@ class VtoHandleiding extends VtoBase {
 // exist"). Daarom registreren we opnieuw zolang het nodig is, telkens via window.customElements
 // (het register dat NU actief is) en met een nieuwe subklasse (een constructor mag maar een keer).
 const CARD_CLASSES = [["btechnics-vto-overzicht", VtoOverzicht], ["btechnics-vto-toegang", VtoToegang], ["btechnics-vto-codes", VtoCodes], ["btechnics-vto-handleiding", VtoHandleiding]];
-const CARDS_VERSION = "0.10.1";
+const CARDS_VERSION = "0.10.2";
 const define = (name, cls) => {
   if (window.customElements.get(name)) return;
   try {
