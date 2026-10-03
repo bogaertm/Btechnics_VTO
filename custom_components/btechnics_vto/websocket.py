@@ -32,6 +32,7 @@ def _coords(hass):
 @callback
 def async_register(hass: HomeAssistant):
     websocket_api.async_register_command(hass, ws_doors)
+    websocket_api.async_register_command(hass, ws_errors)
     websocket_api.async_register_command(hass, ws_history)
     websocket_api.async_register_command(hass, ws_codes)
     websocket_api.async_register_command(hass, ws_manage_list)
@@ -466,3 +467,18 @@ async def ws_user_days(hass, connection, msg):
         "total": r["total"], "opened": r["opened"], "refused": r["refused"],
         "days": [{"day": d["day"], "count": d["count"], "opened": d["opened"], "refused": d["refused"], "doors": d["doors"]} for d in r["days"]],
     })
+
+
+
+@websocket_api.require_admin
+@websocket_api.websocket_command({vol.Required("type"): f"{DOMAIN}/errors",
+                                  vol.Optional("days", default=60): vol.All(vol.Coerce(int), vol.Range(min=1, max=60))})
+@websocket_api.async_response
+async def ws_errors(hass, connection, msg):
+    """Foutenlog van de laatste 60 dagen (waarschuwingen en fouten van deze integratie), enkel beheerders."""
+    log = hass.data.get(f"{DOMAIN}_errorlog")
+    if log is None:
+        connection.send_error(msg["id"], "not_ready", "foutenlog niet beschikbaar")
+        return
+    await hass.async_add_executor_job(log.flush_to_db)
+    connection.send_result(msg["id"], await hass.async_add_executor_job(log.query, msg["days"]))

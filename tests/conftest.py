@@ -31,3 +31,14 @@ def no_realtime_events(monkeypatch):
     """Geen DHIP-verbinding in de tests (geen netwerk, geen achtergrondthreads)."""
     import custom_components.btechnics_vto as integ
     monkeypatch.setattr(integ, "EVENTS_ENABLED", False)
+
+
+@pytest.fixture(autouse=True)
+def detach_errorlog():
+    """De foutenlog hangt aan een globale logger: na elke test loskoppelen."""
+    yield
+    import logging
+    from custom_components.btechnics_vto.errorlog import ErrorLog
+    lg = logging.getLogger("custom_components.btechnics_vto")
+    for h in [h for h in lg.handlers if isinstance(h, ErrorLog)]:
+        lg.removeHandler(h)

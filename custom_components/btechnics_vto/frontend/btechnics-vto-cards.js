@@ -1888,6 +1888,34 @@ class VtoCodes extends VtoBase {
 
 /* ------------------------------------------------------------------ handleiding (gedeelde opbouw)
    Opbouw: zoeken, "Wat wil je doen?" als tegels met korte stappen, uitleg per scherm inklapbaar, begrippen. */
+// foutenlog van 60 dagen (enkel beheerders): waarschuwingen en fouten van deze integratie, ook na een herstart
+function errorLogSection(root, hass, domain, dateTime) {
+  const box = document.createElement("div");
+  box.className = "errlog";
+  box.innerHTML = `<h3 style="font-size:1.05rem;font-weight:500;margin:22px 0 8px">Foutenlog</h3>
+    <p class="muted" style="margin:0 0 8px;font-size:0.9rem">Waarschuwingen en fouten van de laatste 60 dagen, ook na een herstart van Home Assistant. Dezelfde melding op dezelfde dag telt op.</p>
+    <button class="btn" data-errlog>Foutenlog tonen</button><div class="errout"></div>`;
+  root.appendChild(box);
+  const out = box.querySelector(".errout"), btn = box.querySelector("[data-errlog]");
+  const e2 = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
+  btn.addEventListener("click", async () => {
+    if (out.dataset.open === "1") { out.innerHTML = ""; out.dataset.open = ""; btn.textContent = "Foutenlog tonen"; return; }
+    btn.disabled = true;
+    try {
+      const r = await hass.callWS({ type: `${domain}/errors`, days: 60 });
+      const t = r.totals || {};
+      out.innerHTML = `<p style="margin:10px 0">${r.rows.length ? `<b>${(t.ERROR || 0) + (t.CRITICAL || 0)}</b> fouten en <b>${t.WARNING || 0}</b> waarschuwingen in 60 dagen.` : "Geen waarschuwingen of fouten in de laatste 60 dagen."}</p>
+        ${r.rows.length ? `<div class="scroll"><table><thead><tr><th>Laatst</th><th>Niveau</th><th>Onderdeel</th><th>Melding</th><th class="num">Aantal</th></tr></thead><tbody>
+        ${r.rows.map((x) => `<tr><td style="white-space:nowrap">${e2(dateTime(x.last))}</td><td>${x.level === "WARNING" ? "waarschuwing" : "fout"}</td><td>${e2(x.source)}</td>
+          <td>${x.details ? `<details><summary>${e2(x.message)}</summary><pre style="white-space:pre-wrap;font-size:0.8rem;margin:6px 0 0">${e2(x.details)}</pre></details>` : e2(x.message)}</td>
+          <td class="num">${x.count}</td></tr>`).join("")}</tbody></table></div>` : ""}`;
+      out.dataset.open = "1"; btn.textContent = "Foutenlog verbergen";
+    } catch (e) {
+      out.innerHTML = `<div class="error">Foutenlog laden mislukt: ${e2((e && e.message) || e)}</div>`;
+    } finally { btn.disabled = false; }
+  });
+}
+
 const HELP_CSS = `
   .hp { max-width: 980px; line-height: 1.5; }
   .hp-search { width: 100%; max-width: 420px; margin: 0 0 14px; }
@@ -2048,6 +2076,7 @@ class VtoHandleiding extends VtoBase {
       history.pushState(null, "", `${base}/${view}`);
       window.dispatchEvent(new CustomEvent("location-changed", { detail: { replace: false } }));
     });
+    if (isAdmin(this._hass)) errorLogSection(this.shadowRoot.getElementById("hb"), this._hass, "btechnics_vto", (ts) => this._fmt.dateTime.format(new Date(ts * 1000)));
   }
   getCardSize() { return 12; }
   static getStubConfig() { return {}; }
@@ -2058,7 +2087,7 @@ class VtoHandleiding extends VtoBase {
 // exist"). Daarom registreren we opnieuw zolang het nodig is, telkens via window.customElements
 // (het register dat NU actief is) en met een nieuwe subklasse (een constructor mag maar een keer).
 const CARD_CLASSES = [["btechnics-vto-overzicht", VtoOverzicht], ["btechnics-vto-toegang", VtoToegang], ["btechnics-vto-codes", VtoCodes], ["btechnics-vto-handleiding", VtoHandleiding]];
-const CARDS_VERSION = "0.10.2";
+const CARDS_VERSION = "0.11.0";
 const define = (name, cls) => {
   if (window.customElements.get(name)) return;
   try {

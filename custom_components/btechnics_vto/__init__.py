@@ -73,6 +73,12 @@ async def _async_global_setup(hass: HomeAssistant) -> AccessArchive:
         if GLOBAL_KEY in hass.data:
             return hass.data.get(ARCHIVE_KEY)
         try:
+            # foutenlog van 60 dagen (system_log van Home Assistant begint bij elke herstart opnieuw)
+            from .errorlog import async_setup_errorlog
+            await async_setup_errorlog(hass, DOMAIN)
+        except Exception:  # noqa: BLE001  de foutenlog is een hulpmiddel
+            _LOGGER.exception("Foutenlog kon niet geopend worden")
+        try:
             archive = await hass.async_add_executor_job(AccessArchive, hass.config.path(ARCHIVE_FILE))
         except Exception:  # noqa: BLE001  het archief is optioneel: de deuren moeten altijd werken
             _LOGGER.exception("Toegangsarchief kon niet geopend worden; deuren werken verder zonder archief")
