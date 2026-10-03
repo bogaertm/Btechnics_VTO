@@ -378,7 +378,66 @@ async def test_geen_geheimen_voor_gewone_gebruikers(hass, devices, hass_ws_clien
     await ro.send_json_auto_id({"type": f"{DOMAIN}/doors"})
     r = await ro.receive_json()
     assert r["success"] and "AB12CD34" not in str(r["result"]) and "936100" not in str(r["result"])
-    assert r["result"]["doors"][0]["last_unlock"]["name"] == "Roijin"
+    d = r["result"]["doors"][0]
+    assert d["last_unlock"] is None and d["recent"] == [] and "Roijin" not in str(r["result"]) and r["result"]["admin"] is False
+    assert all(x["today"]["opened"] >= 0 for x in r["result"]["doors"])   # aantallen van vandaag blijven
+    for eid in ("sensor.vto_cafe_codes", "sensor.vto_cafe_badges", "sensor.vto_cafe_laatste_unlock"):
+        st = hass.states.get(eid)
+        assert st is None or ("Roijin" not in st.state and "Roijin" not in str(st.attributes)), eid
+
+
+async def test_gebruiker_zonder_beheerrechten(hass, devices, hass_ws_client, hass_read_only_access_token, hass_admin_user):
+    """Gebruiker zonder beheerrechten: eigen tijdelijke codes (max 7 dagen, max 10), aantallen per dag, niets anders."""
+    cafe, _ = devices
+    cafe.add_log(int(dt_util.now().timestamp()) - 60, name="Roijin")
+    await setup_two_entries(hass)
+    await hass.async_block_till_done()
+    ro = await hass_ws_client(hass, hass_read_only_access_token)
+
+    async def ws(c, **kw):
+        await c.send_json_auto_id(kw)
+        return await c.receive_json()
+
+    loc = lambda d: (dt_util.now() + d).strftime("%Y-%m-%dT%H:%M:%S")      # noqa: E731
+    for t in ("history", "manage/list", "codes"):
+        assert not (await ws(ro, type=f"{DOMAIN}/{t}"))["success"], t
+    assert not (await ws(ro, type=f"{DOMAIN}/manage/action", action="add", name="X", code="445566", doors=["cafe"]))["success"]
+    r = await ws(ro, type=f"{DOMAIN}/user/add", name="Pakket", doors=["cafe"], valid_until=loc(timedelta(days=8)))
+    assert not r["success"] and "7 dagen" in r["error"]["message"]
+    r = await ws(ro, type=f"{DOMAIN}/user/add", name="Pakket", doors=["cafe"], valid_until=loc(timedelta(hours=5)), max_uses=1)
+    assert r["success"], r
+    cid = r["result"]["id"]
+    m = reg(hass).managed[cid]
+    assert m["owner"] and m["max_uses"] == 1 and len(on(cafe, m["name"], m["code"])) == 1    # code door HA gekozen
+    lst = (await ws(ro, type=f"{DOMAIN}/user/codes"))["result"]
+    assert [e["id"] for e in lst["entries"]] == [cid] and lst["admin"] is False and lst["limits"]["active"] == 10
+    # andermans code stoppen kan niet
+    adm = await hass_ws_client(hass)
+    other = next(c for c, x in reg(hass).managed.items() if x["name"] == "Adriaan")
+    assert not (await ws(ro, type=f"{DOMAIN}/user/stop", entry=other))["success"]
+    assert reg(hass).managed[other]["status"] == "active"
+    assert (await ws(ro, type=f"{DOMAIN}/user/stop", entry=cid))["success"]
+    assert reg(hass).managed[cid]["status"] == "retired" and on(cafe, m["name"]) == []
+    assert reg(hass).audit[-1]["user"] != "automatisch"
+    # beheerder ziet wie de code maakte
+    e = next(x for x in (await ws(adm, type=f"{DOMAIN}/manage/list"))["result"]["entries"] if x["id"] == cid)
+    assert e["owner_name"]
+    # beperkte historiek: enkel aantallen per dag
+    d = (await ws(ro, type=f"{DOMAIN}/user/days", days=7))["result"]
+    assert d["total"] >= 1 and set(d["days"][0]) == {"day", "count", "opened", "refused", "doors"} and "Roijin" not in str(d)
+
+
+async def test_gebruiker_maximaal_tien_actief(hass, devices, hass_ws_client, hass_read_only_access_token):
+    await setup_two_entries(hass)
+    await hass.async_block_till_done()
+    ro = await hass_ws_client(hass, hass_read_only_access_token)
+    until = (dt_util.now() + timedelta(hours=3)).strftime("%Y-%m-%dT%H:%M:%S")
+    for i in range(10):
+        await ro.send_json_auto_id({"type": f"{DOMAIN}/user/add", "name": f"Gast {i}", "doors": ["cafe"], "valid_until": until})
+        assert (await ro.receive_json())["success"]
+    await ro.send_json_auto_id({"type": f"{DOMAIN}/user/add", "name": "Gast 11", "doors": ["cafe"], "valid_until": until})
+    r = await ro.receive_json()
+    assert not r["success"] and "10" in r["error"]["message"]
 
 
 async def test_leesfout_toestel_geen_lege_tabel(hass, devices):

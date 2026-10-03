@@ -38,8 +38,13 @@ class LastUnlockSensor(_Base):
 
     @property
     def native_value(self):
+        # zonder naam: sensoren zijn zichtbaar voor elke gebruiker; namen enkel voor beheerders in de kaarten
         u = self.coordinator.last_unlock
-        return u["name"][:255] if u else None
+        if not u:
+            return None
+        m = str(u.get("method") or "")
+        how = "op afstand" if m.startswith("op afstand") else f"via {m}" if m else ""
+        return f"{'Geopend' if u.get('opened') else 'Geweigerd'} {how}".strip()[:255]
 
     @property
     def icon(self):
@@ -49,15 +54,15 @@ class LastUnlockSensor(_Base):
     @property
     def extra_state_attributes(self):
         # Zonder kaartnummers: attributen zijn leesbaar voor elke gebruiker, ook zonder beheerdersrechten.
-        u = {k: v for k, v in (self.coordinator.last_unlock or {}).items() if k != "card"}
-        return {**u, "recent": [{k: v for k, v in r.items() if k != "card"} for r in self.coordinator.recent]}
+        hide = ("card", "name", "user")
+        u = {k: v for k, v in (self.coordinator.last_unlock or {}).items() if k not in hide}
+        return {**u, "recent": [{k: v for k, v in r.items() if k not in hide} for r in self.coordinator.recent]}
 
 
 class CountSensor(_Base):
     _attr_state_class = "measurement"
-    # Enkel de namen in het attribuut "lijst": codes en kaartnummers zijn voor beheerders
-    # (via de kaart of list_codes), attributen zijn leesbaar voor elke gebruiker.
-    _unrecorded_attributes = frozenset({"lijst"})
+    # Enkel het aantal: namen, codes en kaartnummers zijn voor beheerders (via de kaarten of list_codes),
+    # attributen zijn leesbaar voor elke gebruiker.
 
     def __init__(self, coordinator, key, name, icon):
         super().__init__(coordinator)
@@ -69,14 +74,3 @@ class CountSensor(_Base):
     @property
     def native_value(self):
         return (self.coordinator.data or {}).get(self._key)
-
-    @property
-    def extra_state_attributes(self):
-        # Volledige lijst als attribuut, zodat een dashboardkaart (markdown/template)
-        # alle codes of kaarten van deze deur kan tonen zonder aparte service-aanroep.
-        if self._key == "codes":
-            lijst = [{"naam": (r.get("UserID") or "").strip() or "?"} for r in self.coordinator.codes]
-        else:
-            lijst = [{"naam": r.get("CardName") or r.get("UserID") or "?"} for r in self.coordinator.cards]
-        lijst.sort(key=lambda x: str(x["naam"]).lower())
-        return {"lijst": lijst}

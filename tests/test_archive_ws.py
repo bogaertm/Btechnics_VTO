@@ -236,7 +236,7 @@ async def test_nieuwe_vto_toevoegen_verschijnt_overal(hass, devices, hass_ws_cli
         r = await hass.config_entries.flow.async_configure(r["flow_id"], {"add_another": False})
         await hass.async_block_till_done()
     assert r["type"] is FlowResultType.CREATE_ENTRY and r["title"] == "Achterdeur"
-    assert hass.states.get("sensor.vto_achterdeur_laatste_unlock").state == "Oud19"
+    assert coord(hass, "achterdeur").last_unlock["name"] == "Oud19" and hass.states.get("sensor.vto_achterdeur_laatste_unlock").state == "Geopend via code"
     c = await hass_ws_client(hass)
     await c.send_json_auto_id({"type": f"{DOMAIN}/doors"})
     names = [d["name"] for d in (await c.receive_json())["result"]["doors"]]

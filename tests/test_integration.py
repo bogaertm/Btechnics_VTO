@@ -104,12 +104,12 @@ async def test_tijdzone_zomer_en_winter(hass, devices):
     cafe.add_log(int(datetime(2026, 9, 25, 12, 43, 44, tzinfo=timezone.utc).timestamp()), name="Eliot")
     await setup_two_entries(hass)
     st = hass.states.get("sensor.vto_cafe_laatste_unlock")
-    assert st.state == "Eliot"
+    assert coord(hass, "cafe").last_unlock["name"] == "Eliot"
     assert st.attributes["time"] == "2026-09-25T14:43:44+02:00"
     cafe.add_log(int(datetime(2026, 12, 1, 12, 0, 0, tzinfo=timezone.utc).timestamp()), name="Winter")
     await poll(hass, "cafe")
     st = hass.states.get("sensor.vto_cafe_laatste_unlock")
-    assert st.state == "Winter"
+    assert coord(hass, "cafe").last_unlock["name"] == "Winter"
     assert st.attributes["time"] == "2026-12-01T13:00:00+01:00"
 
 
@@ -121,10 +121,10 @@ async def test_eerste_start_stille_baseline(hass, devices, events):
     await setup_two_entries(hass)
     assert events == []
     st = hass.states.get("sensor.vto_cafe_laatste_unlock")
-    assert st.state == "Oud999"
+    assert coord(hass, "cafe").last_unlock["name"] == "Oud999"
     assert len(st.attributes["recent"]) == 50
-    assert st.attributes["recent"][0]["name"] == "Oud999"   # recentste eerst
-    assert st.attributes["recent"][-1]["name"] == "Oud950"
+    assert coord(hass, "cafe").recent[0]["name"] == "Oud999"   # recentste eerst
+    assert coord(hass, "cafe").recent[-1]["name"] == "Oud950"
 
 
 async def test_nieuwe_toegang_bij_volle_buffer_wordt_gezien(hass, devices, events, logbook_calls):
@@ -137,7 +137,7 @@ async def test_nieuwe_toegang_bij_volle_buffer_wordt_gezien(hass, devices, event
     assert len(cafe.log) == 1000
     await poll(hass, "cafe")
     assert [e["name"] for e in events] == ["Eliot"]
-    assert hass.states.get("sensor.vto_cafe_laatste_unlock").state == "Eliot"
+    assert coord(hass, "cafe").last_unlock["name"] == "Eliot"
     assert len(logbook_calls) == 1
     assert logbook_calls[0]["entity_id"] == "sensor.vto_cafe_laatste_unlock"
     assert "Eliot via code (geopend) op 25/09/2026 14:00:00" in logbook_calls[0]["message"]
@@ -172,7 +172,7 @@ async def test_herstart_niets_dubbel_niets_verloren(hass, devices, events):
     await restart(hass, entries)
     assert [e["name"] for e in events] == ["VoorHerstart"]          # niet opnieuw gemeld
     # sensor toont na herstart meteen de laatste toegang, niet "onbekend"
-    assert hass.states.get("sensor.vto_cafe_laatste_unlock").state == "VoorHerstart"
+    assert coord(hass, "cafe").last_unlock["name"] == "VoorHerstart"
     # toegangen terwijl HA uit stond
     await restart_with_offline_events(hass, entries, cafe, kam)
     assert [e["name"] for e in events] == ["VoorHerstart", "TijdensDown1", "TijdensDown2", "KamDown"]
@@ -233,7 +233,7 @@ async def test_buffer_gewist_en_klok_teruggezet(hass, devices, events):
     for _ in range(LOG_LOST_POLLS):
         await poll(hass, "cafe")
     assert events == []                       # nooit valse meldingen
-    assert hass.states.get("sensor.vto_cafe_laatste_unlock").state == "NaReset"   # na nieuwe baseline
+    assert coord(hass, "cafe").last_unlock["name"] == "NaReset"   # na nieuwe baseline
     cafe.add_log(T0 - 3500, name="Daarna")
     await poll(hass, "cafe")
     assert [e["name"] for e in events] == ["Daarna"]
@@ -428,13 +428,16 @@ async def test_klok_van_de_toestellen(hass, devices):
 
 
 async def test_attributen_niet_in_databank(hass, devices):
-    from custom_components.btechnics_vto.sensor import CountSensor, LastUnlockSensor
-    assert "lijst" in CountSensor._unrecorded_attributes
+    from custom_components.btechnics_vto.sensor import LastUnlockSensor
     assert {"recent", "card"} <= LastUnlockSensor._unrecorded_attributes
+    cafe, _ = devices
+    cafe.add_log(T0, name="Eliot")
     await setup_two_entries(hass)
     st = hass.states.get("sensor.vto_cafe_codes")
-    assert st.attributes["lijst"] == [{"naam": "Adriaan"}]                  # geen codes in attributen (voor iedereen leesbaar)
-    assert "936100" not in str(hass.states.get("sensor.vto_cafe_codes").attributes)
+    assert "lijst" not in st.attributes and "Adriaan" not in str(st.attributes)   # sensoren zijn voor iedereen leesbaar: geen namen
+    assert "936100" not in str(st.attributes)
+    lu = hass.states.get("sensor.vto_cafe_laatste_unlock")
+    assert lu.state == "Geopend via code" and "Eliot" not in str(lu.attributes)
 
 
 async def test_unload_ruimt_services_op(hass, devices):
@@ -462,8 +465,8 @@ async def test_record_met_toekomstig_tijdstip_blokkeert_niets(hass, devices, eve
     cafe.add_log(T0 + 20, name="B")
     await poll(hass, "cafe")
     assert [e["name"] for e in events] == ["Bogus", "A", "B"]
-    assert hass.states.get("sensor.vto_cafe_laatste_unlock").state == "B"
-    assert hass.states.get("sensor.vto_cafe_laatste_unlock").attributes["recent"][0]["name"] == "B"
+    assert coord(hass, "cafe").last_unlock["name"] == "B"
+    assert coord(hass, "cafe").recent[0]["name"] == "B"
 
 
 async def test_klok_enkele_seconden_teruggezet(hass, devices, events):
@@ -522,7 +525,7 @@ async def test_meldingen_wachten_tot_ha_gestart_is(hass, devices, events, logboo
     cafe.add_log(T0, name="TijdensOpstart")
     await poll(hass, "cafe")
     assert events == [] and logbook_calls == []
-    assert hass.states.get("sensor.vto_cafe_laatste_unlock").state == "TijdensOpstart"
+    assert coord(hass, "cafe").last_unlock["name"] == "TijdensOpstart"
     hass.set_state(CoreState.running)
     hass.bus.async_fire(EVENT_HOMEASSISTANT_STARTED)
     await hass.async_block_till_done()

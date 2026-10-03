@@ -351,9 +351,12 @@ class VtoOverzicht extends VtoBase {
         background: var(--primary-color); color: var(--text-primary-color, #fff); border-color: var(--primary-color); }
       ha-card.m .opener button.btn.sure { background: var(--error-color, ${C_REFUSED}); border-color: var(--error-color, ${C_REFUSED}); }
       ha-card.m .opener .omsg { white-space: normal; }
+      /* gebruiker zonder beheerrechten: enkel status en aantallen van vandaag */
+      ha-card.user .last, ha-card.user table.recent, ha-card.user .stats .stat:nth-child(n+3) { display: none; }
+      ha-card.user .stats { grid-template-columns: 1fr 1fr; }
       ha-card.m button.tohist { display: block; order: 8; background: none; border: 0; color: var(--primary-color); font: inherit; padding: 6px 0; min-height: 44px; cursor: pointer; }
-    </style><ha-card><div class="title">${esc(this._config.title || "Deuren")}</div><div id="body" class="muted">Laden...</div><div id="foot" class="foot"></div>
-      ${isAdmin(this._hass) ? `${FAB}<div class="fabspace monly"></div>` : ""}</ha-card>`;
+    </style><ha-card class="${isAdmin(this._hass) ? "" : "user"}"><div class="title">${esc(this._config.title || "Deuren")}</div><div id="body" class="muted">Laden...</div><div id="foot" class="foot"></div>
+      ${FAB}<div class="fabspace monly"></div></ha-card>`;
     const fab = this.shadowRoot.getElementById("fab");
     if (fab) fab.addEventListener("click", () => goView(this._config.codes_view || "codes", { quick: 1 }));
     this._watchMode();
@@ -412,7 +415,7 @@ class VtoOverzicht extends VtoBase {
     });
     const a = this._data.archive || {};
     const first = Object.values(a).map((x) => x.first).filter(Boolean).sort()[0];
-    this.shadowRoot.getElementById("foot").textContent = first
+    this.shadowRoot.getElementById("foot").textContent = !isAdmin(this._hass) ? "" : first
       ? `Archief sinds ${f.dateTime.format(new Date(first * 1000))}, ${Object.values(a).reduce((n, x) => n + x.count, 0).toLocaleString("nl-BE")} toegangen bewaard.`
       : "";
   }
@@ -504,6 +507,7 @@ class VtoToegang extends VtoBase {
     clearTimeout(this._retry);
   }
   _init() {
+    if (!isAdmin(this._hass)) return this._initUser();
     const c = this._config;
     this._state = {
       search: "", person: null, door: "", status: "all",
@@ -665,11 +669,84 @@ class VtoToegang extends VtoBase {
     // Home Assistant houdt een bezochte pagina soms verbonden: ook bij elke paginawissel naar een opdracht kijken
     if (!this._locL) { this._locL = () => setTimeout(() => this._checkIntent(), 400); window.addEventListener("location-changed", this._locL); }
   }
+  _initUser() {
+    // gebruiker zonder beheerrechten: enkel aantallen per dag en per deur, geen namen, uren of foto's
+    const c = this._config;
+    this._user = { door: "", period: "30" };
+    this._state = null;
+    this.shadowRoot.innerHTML = `<style>${BASE_CSS}
+      .filters { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 12px; }
+      ha-card.m .filters select { flex: 1 1 140px; min-height: 44px; }
+      .kpis { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-bottom: 12px; }
+      .kpi { background: var(--secondary-background-color); border-radius: 8px; padding: 10px 12px; }
+      .kpi .v { font-size: 1.4rem; font-weight: 500; font-variant-numeric: tabular-nums; }
+      .kpi .l { font-size: 0.85rem; color: var(--secondary-text-color); display: flex; align-items: center; gap: 6px; }
+      ha-card.m .kpi { padding: 6px 8px; } ha-card.m .kpi .v { font-size: 1.1rem; }
+      .info { font-size: 0.8rem; color: var(--secondary-text-color); margin-top: 10px; }
+    </style><ha-card>
+      <div class="title">${esc(c.title || "Toegangshistoriek")}</div>
+      <div class="filters">
+        <select id="door"><option value="">Alle deuren</option></select>
+        <select id="period"><option value="7">7 dagen</option><option value="30">30 dagen</option><option value="90">90 dagen</option><option value="365">1 jaar</option></select>
+      </div>
+      <div id="kpis" class="kpis"></div>
+      <div id="out" class="scroll"><div class="muted">Laden...</div></div>
+      <div class="info">Aantal toegangen per dag. Namen, uren en foto's zijn enkel zichtbaar voor beheerders.</div>
+      ${FAB}<div class="fabspace monly"></div>
+    </ha-card>`;
+    const $ = (id) => this.shadowRoot.getElementById(id);
+    $("period").value = this._user.period;
+    $("fab").addEventListener("click", () => goView(c.codes_view || "codes", { quick: 1 }));
+    $("door").addEventListener("change", (e) => { this._user.door = e.target.value; this._loadUser(); });
+    $("period").addEventListener("change", (e) => { this._user.period = e.target.value; this._loadUser(); });
+    const it = takeIntent(c.view || "historiek");
+    if (it && it.door) this._user.door = it.door;
+    this._ws({ type: "btechnics_vto/doors" }).then((d) => {
+      $("door").innerHTML = `<option value="">Alle deuren</option>` + d.doors.map((x) => `<option value="${esc(x.id)}">${esc(x.name)}</option>`).join("");
+      $("door").value = this._user.door;
+    }).catch(() => {});
+    this._watchMode();
+    if (!this._locL) { this._locL = () => setTimeout(() => this._checkIntent(), 400); window.addEventListener("location-changed", this._locL); }
+    this._loadUser();
+  }
+  async _loadUser() {
+    const u = this._user, seq = (this._seq = (this._seq || 0) + 1);
+    const $ = (id) => this.shadowRoot.getElementById(id);
+    try {
+      const r = await this._ws({ type: "btechnics_vto/user/days", days: parseInt(u.period, 10), ...(u.door ? { door_ids: [u.door] } : {}) });
+      if (seq !== this._seq) return;
+      this._ures = r;
+      $("kpis").innerHTML = `<div class="kpi"><div class="v">${r.total.toLocaleString("nl-BE")}</div><div class="l">Toegangen</div></div>
+        <div class="kpi"><div class="v">${r.opened.toLocaleString("nl-BE")}</div><div class="l"><span class="dot open"></span>Geopend</div></div>
+        <div class="kpi"><div class="v">${r.refused.toLocaleString("nl-BE")}</div><div class="l"><span class="dot refused"></span>Geweigerd</div></div>`;
+      this._renderUser();
+    } catch (e) {
+      if (seq === this._seq) $("out").innerHTML = `<div class="error">Kon de historiek niet laden: ${esc(errText(e))}</div>`;
+    }
+  }
+  _renderUser() {
+    const r = this._ures, f = this._fmt, out = this.shadowRoot.getElementById("out");
+    if (!r) return;
+    if (!r.days.length) { out.innerHTML = `<div class="empty">Geen toegangen in deze periode</div>`; return; }
+    const day = (d) => esc(f.date.format(new Date(`${d.day}T12:00:00Z`)));
+    const doors = (d) => d.doors.map((x) => `${esc(x.door)} ${x.count}`).join(", ");
+    out.innerHTML = this._mobile
+      ? `<div class="mlist">${r.days.map((d) => `<div class="mrow" style="cursor:default"><span class="mt"><b>${day(d)}</b>
+          <span class="sub">${d.count} toegangen${d.refused ? `, <span class="refusedtxt">${d.refused} geweigerd</span>` : ""}</span><span class="sub">${doors(d)}</span></span></div>`).join("")}</div>`
+      : `<table><thead><tr><th>Dag</th><th class="num">Toegangen</th><th class="num">Geopend</th><th class="num">Geweigerd</th><th>Per deur</th></tr></thead><tbody>
+          ${r.days.map((d) => `<tr><td class="when">${day(d)}</td><td class="num">${d.count}</td><td class="num">${d.opened}</td>
+            <td class="num">${d.refused ? `<span class="refusedtxt">${d.refused}</span>` : 0}</td><td class="muted">${doors(d)}</td></tr>`).join("")}</tbody></table>`;
+  }
   connectedCallback() {
     this._checkIntent();
   }
   _checkIntent() {
     // opnieuw getoond (bv. via "Alles van Cafe in Historiek" op het overzicht): deurfilter overnemen
+    if (this._user && this.isConnected) {
+      const iu = takeIntent(this._config.view || "historiek");
+      if (iu && iu.door) { this._user.door = iu.door; const sd = this.shadowRoot.getElementById("door"); if (sd) sd.value = iu.door; this._loadUser(); }
+      return;
+    }
     if (!this._hass || !this._state || !this.isConnected) return;
     const it = takeIntent(this._config.view || "historiek");
     if (it && it.door) {
@@ -680,6 +757,7 @@ class VtoToegang extends VtoBase {
     }
   }
   _modeChanged() {
+    if (this._user) return this._renderUser();
     if (this._res) this._renderOut();
   }
   _syncFilters() {
@@ -1015,6 +1093,8 @@ class VtoToegang extends VtoBase {
 
 class VtoCodes extends VtoBase {
   _init() {
+    // gebruiker zonder beheerrechten: enkel eigen tijdelijke codes maken, delen en stoppen
+    this._userMode = !isAdmin(this._hass);
     this._show = false;
     this._revealed = new Set(); // codes die met een klik zichtbaar gemaakt zijn
     this._q = "";
@@ -1093,9 +1173,13 @@ class VtoCodes extends VtoBase {
       .bigcode .mono, .bigcode .hidden { font-size: 1.6rem; letter-spacing: 4px; }
       .bigcode small { color: var(--secondary-text-color); font-size: 0.8rem; }
       .smsg { margin: 0 0 8px; }
+      ha-card.user #kind, ha-card.user #toggle, ha-card.user #new, ha-card.user #newbadge, ha-card.user #plus, ha-card.user #tabs,
+      ha-card.user .audtitle, ha-card.user #audit { display: none !important; }
+      .uinfo { font-size: 0.85rem; color: var(--secondary-text-color); margin: -4px 0 12px; }
     </style>
-    <ha-card>
-      <div class="title">${esc(this._config.title || "Codes en badges")}</div>
+    <ha-card class="${this._userMode ? "user" : ""}">
+      <div class="title">${esc(this._config.title || (this._userMode ? "Tijdelijke codes" : "Codes en badges"))}</div>
+      ${this._userMode ? `<div class="uinfo">Je ziet hier enkel de tijdelijke codes die jij maakte. Home Assistant kiest de code; maximaal 7 dagen geldig en maximaal 10 tegelijk actief.</div>` : ""}
       <div class="bar">
         <input id="q" type="search" placeholder="Zoek persoon, code of badgenummer" autocomplete="off">
         <select id="kind" class="donly"><option value="all">Codes en badges</option><option value="code">Codes</option><option value="badge">Badges</option></select>
@@ -1111,11 +1195,12 @@ class VtoCodes extends VtoBase {
       <div id="hist" class="panel hist sheet"></div>
       <div id="msg" class="msg"></div>
       <div id="out" class="scroll"><div class="muted">Laden...</div></div>
-      <div class="title donly" style="margin-top:20px;font-size:1.05rem">Wijzigingen</div>
+      <div class="title donly audtitle" style="margin-top:20px;font-size:1.05rem">Wijzigingen</div>
       <div id="audit" class="scroll"></div>
       ${FAB}<div class="fabspace monly"></div>
     </ha-card>`;
     const $ = (id) => this.shadowRoot.getElementById(id);
+    if (this._userMode) $("q").placeholder = "Zoek op naam";
     $("fab").addEventListener("click", () => this._openQuick());
     $("plus").addEventListener("click", () => this._newSheet());
     $("shade").addEventListener("click", () => { if (this._busy) return; this._closeForm(); this._closeHistory(); });
@@ -1203,12 +1288,17 @@ class VtoCodes extends VtoBase {
     this._form = { type: "sheet", entry: e };
     const doors = (e.doors.length ? e.doors : e.stored).map((d) => d.name);
     const shown = this._show || this._revealed.has(e.id);
-    const secret = e.kind === "badge" ? `<div class="bigcode" style="cursor:default"><span class="mono">${esc(e.secret)}</span><small>badgenummer</small></div>`
+    const secret = this._userMode ? `<div class="bigcode" style="cursor:default"><span class="hidden">&bull;&bull;&bull;&bull;&bull;&bull;</span><small>tik op Delen om de code te zien</small></div>`
+      : e.kind === "badge" ? `<div class="bigcode" style="cursor:default"><span class="mono">${esc(e.secret)}</span><small>badgenummer</small></div>`
       : `<button class="bigcode" data-reveal="${esc(e.id)}">${shown ? `<span class="mono">${esc(e.secret)}</span><small>tik om te verbergen</small>` : `<span class="hidden">&bull;&bull;&bull;&bull;&bull;&bull;</span><small>tik om de code te tonen</small>`}</button>`;
     const a = (act, icon, label, cls) => `<button class="act ${cls || ""}" data-act="${act}" data-id="${esc(e.id)}"><ha-icon icon="${icon}"></ha-icon>${label}</button>`;
     const share = e.kind === "code" ? a("share", "mdi:share-variant", "Delen") : "";
     let main, danger;
-    if (e.status === "active") { main = share + a("edit", "mdi:pencil", "Aanpassen") + a("block", "mdi:lock-clock", "Blokkeren"); danger = a("retire", "mdi:account-cancel", "Uit dienst zetten", "danger"); }
+    if (this._userMode) {
+      const live = e.status !== "retired";
+      main = live ? share : "";
+      danger = live ? a("retire", "mdi:stop-circle-outline", "Stoppen", "danger") : "";
+    } else if (e.status === "active") { main = share + a("edit", "mdi:pencil", "Aanpassen") + a("block", "mdi:lock-clock", "Blokkeren"); danger = a("retire", "mdi:account-cancel", "Uit dienst zetten", "danger"); }
     else if (this._waiting(e)) { main = share + a("unblock", "mdi:play", "Nu al activeren", "primary") + a("edit", "mdi:pencil", "Aanpassen"); danger = a("retire", "mdi:account-cancel", "Uit dienst zetten", "danger"); }
     else if (e.status === "blocked") { main = a("unblock", "mdi:lock-open-variant", "Deblokkeren", "primary") + a("block", "mdi:lock-clock", "Einde blokkering aanpassen") + a("edit", "mdi:pencil", "Aanpassen"); danger = a("retire", "mdi:account-cancel", "Uit dienst zetten", "danger"); }
     else { main = a("restore", "mdi:restore", "Herstellen", "primary") + a("edit", "mdi:pencil", "Aanpassen"); danger = a("forget", "mdi:delete-forever", "Definitief verwijderen", "danger"); }
@@ -1219,7 +1309,7 @@ class VtoCodes extends VtoBase {
       ${e.max_uses && e.status !== "retired" ? `<div class="valid">${e.max_uses === 1 ? "Eenmalig" : `${e.uses || 0} van ${e.max_uses} keer gebruikt`}</div>` : ""}
       ${e.status !== "active" && e.doors.length ? `<div class="warn">Nog actief op ${e.doors.map((d) => esc(d.name)).join(", ")}</div>` : ""}
       ${secret}
-      ${main}<button class="act" data-hist="${esc(e.name || "")}"><ha-icon icon="mdi:history"></ha-icon>Geschiedenis</button>
+      ${main}${this._userMode ? "" : `<button class="act" data-hist="${esc(e.name || "")}"><ha-icon icon="mdi:history"></ha-icon>Geschiedenis</button>`}
       <div class="actsep"></div>${danger}
       <button class="act" id="cancel"><ha-icon icon="mdi:close"></ha-icon>Sluiten</button>`;
     p.querySelector("#cancel").addEventListener("click", () => this._closeForm());
@@ -1229,7 +1319,7 @@ class VtoCodes extends VtoBase {
     // niet verversen terwijl een formulier open is of een actie loopt: anders verdwijnt de invoer
     if (this._busy || this._form) return;
     try {
-      this._data = await this._ws({ type: "btechnics_vto/manage/list" });
+      this._data = await this._ws({ type: this._userMode ? "btechnics_vto/user/codes" : "btechnics_vto/manage/list" });
       this._render();
       // vanop een ander tabblad op de oranje knop gedrukt: meteen het formulier Tijdelijke code
       const it = takeIntent(this._config.view || "codes");
@@ -1321,8 +1411,9 @@ class VtoCodes extends VtoBase {
     const q = this._q;
     const list = entries.filter((e) => (this._status === "all" || (this._status === "temp" ? temp(e) : e.status === this._status))
       && (this._kind === "all" || e.kind === this._kind)
-      && (!q || e.name.toLowerCase().includes(q) || String(e.secret).toLowerCase().includes(q)));
-    const sec = (e) => e.kind === "badge"
+      && (!q || e.name.toLowerCase().includes(q) || (!this._userMode && String(e.secret).toLowerCase().includes(q))));
+    const sec = (e) => this._userMode ? `<span class="hidden" title="Delen toont de code">&bull;&bull;&bull;&bull;&bull;&bull;</span>`
+      : e.kind === "badge"
       ? `<span class="mono">${esc(e.secret)}</span>`
       : this._show ? `<span class="mono">${esc(e.secret)}</span>`
       : this._revealed.has(e.id)
@@ -1331,6 +1422,7 @@ class VtoCodes extends VtoBase {
     const acts = (e) => {
       const b = (act, label, cls) => `<button class="btn ${cls || ""}" data-act="${act}" data-id="${esc(e.id)}">${label}</button>`;
       const share = e.kind === "code" ? b("share", "Delen") : "";
+      if (this._userMode) return e.status === "retired" ? "" : share + b("retire", "Stoppen", "danger");
       if (e.status === "active") return share + b("edit", "Aanpassen") + b("block", "Blokkeren") + b("retire", "Uit dienst", "danger");
       if (this._waiting(e)) return share + b("edit", "Aanpassen") + b("unblock", "Nu al activeren") + b("retire", "Uit dienst", "danger");
       if (e.status === "blocked") return b("unblock", "Deblokkeren", "primary") + b("block", "Einde aanpassen") + b("edit", "Aanpassen") + b("retire", "Uit dienst", "danger");
@@ -1338,7 +1430,7 @@ class VtoCodes extends VtoBase {
     };
     const dot = (e) => `<span class="dot ${e.status === "active" ? "open" : e.status}"></span>`;
     if (!list.length) {
-      $("out").innerHTML = `<div class="empty">Niets gevonden</div>`;
+      $("out").innerHTML = `<div class="empty">${this._userMode && !q ? "Nog geen tijdelijke codes. Maak er een met de knop Tijdelijke code." : "Niets gevonden"}</div>`;
     } else if (this._mobile) {
       const f = this._fmt;
       $("out").innerHTML = `<div class="mlist">${list.map((e) => {
@@ -1349,23 +1441,26 @@ class VtoCodes extends VtoBase {
         if (e.status !== "active") extra.push(`<span class="st ${e.status === "retired" ? "retired" : "blocked"}">${esc(st)}</span>`);
         else if (e.valid_until) extra.push(`<span class="st">tot ${esc(f.compact.format(new Date(e.valid_until)))}</span>`);
         if (e.max_uses === 1 && e.status !== "retired") extra.push('<span class="st">eenmalig</span>');
+        if (e.owner_name) extra.push(`<span class="st">door ${esc(e.owner_name)}</span>`);
         return `<button class="mrow" data-sheet="${esc(e.id)}"><span class="av">${esc((e.name || "?").trim().charAt(0).toUpperCase())}</span>
           <span class="mt"><b>${esc(e.name || "?")}</b><span class="sub">${e.kind === "badge" ? "badge" : "code"}${doors.length ? ` · ${doors.map(esc).join(", ")}` : ""}</span>${extra.length ? `<span class="sub">${extra.join(" · ")}</span>` : ""}</span>
           <span class="dot ${e.status === "active" ? "open" : e.status}"></span><ha-icon icon="mdi:chevron-right"></ha-icon></button>`; }).join("")}</div>`;
     } else {
       $("out").innerHTML = `<table class="list"><thead><tr><th>Persoon</th><th>Soort</th><th>Code of badge</th><th>Deuren</th><th>Status</th><th></th></tr></thead><tbody>
         ${list.map((e) => `<tr>
-          <td><button class="pname linkbtn" data-hist="${esc(e.name || "")}" title="Toegangsgeschiedenis van ${esc(e.name || "?")}">${esc(e.name || "?")}</button></td>
+          <td>${this._userMode ? `<span class="pname">${esc(e.name || "?")}</span>` : `<button class="pname linkbtn" data-hist="${esc(e.name || "")}" title="Toegangsgeschiedenis van ${esc(e.name || "?")}">${esc(e.name || "?")}</button>`}</td>
           <td class="muted kind">${e.kind === "badge" ? "badge" : "code"}</td>
           <td>${sec(e)}</td>
           <td>${e.doors.map((d) => `<span class="chip">${esc(d.name)}</span>`).join("")}${e.stored.map((d) => `<span class="chip stored" title="bewaard, niet op het toestel">${esc(d.name)}</span>`).join("")}</td>
           <td><span class="status">${dot(e)}${esc(this._statusText(e))}</span>
             ${e.valid_until && e.status !== "retired" ? `<div class="valid">Geldig tot ${esc(this._fmt.dateTime.format(new Date(e.valid_until)))}</div>` : ""}
             ${e.max_uses && e.status !== "retired" ? `<div class="valid">${e.max_uses === 1 ? "Eenmalig" : `${e.uses || 0} van ${e.max_uses} keer gebruikt`}</div>` : ""}
+            ${e.owner_name ? `<div class="valid">Gemaakt door ${esc(e.owner_name)}</div>` : ""}
             ${e.status !== "active" && e.doors.length ? `<div class="warn">Nog actief op ${e.doors.map((d) => esc(d.name)).join(", ")}</div>` : ""}</td>
           <td><div class="acts">${acts(e)}</div></td></tr>`).join("")}
         </tbody></table>`;
     }
+    if (this._userMode) { $("audit").innerHTML = ""; return; }
     const shown = this._auditAll ? audit : audit.slice(0, 15);
     if (this._mobile) {
       // gsm: Wijzigingen ingeklapt, als lijst
@@ -1392,6 +1487,7 @@ class VtoCodes extends VtoBase {
   _action(act, e) {
     if (act === "edit" || act === "block") return this._openForm(act, e);
     if (act === "share") return this._openShare(e);
+    if (act === "retire" && this._userMode) return this._openForm("confirm", e, "retire", `'${esc(e.name)}' stoppen? De code werkt meteen niet meer.`);
     if (act === "retire") return this._openForm("confirm", e, "retire",
       `'${esc(e.name)}' uit dienst halen? De ${e.kind === "badge" ? "badge" : "code"} wordt van alle toestellen gehaald en bewaard, zodat je ze later kan herstellen.`);
     if (act === "forget") return this._openForm("confirm", e, "forget",
@@ -1511,6 +1607,8 @@ class VtoCodes extends VtoBase {
       if (!vu) return this._message("Kies tot wanneer de code geldig is.");
       if (vu <= this._localInput(Date.now()) + ":00") return this._message("Het einde ligt in het verleden.");
       if (vf && vu <= vf) return this._message("Het einde moet na het begin liggen.");
+      if (this._userMode && this._localToMs(vu) - Math.max(Date.now(), vf ? this._localToMs(vf) : 0) > 7 * 86400000 + 60000)
+        return this._message("Een tijdelijke code is maximaal 7 dagen geldig.");
       try { localStorage.setItem("btxvto_quick_doors", JSON.stringify(sel)); } catch (err) { /* niet erg */ }
       const msg = { action: "add", name, doors: sel, valid_until: vu };
       if (vf) msg.valid_from = vf;
@@ -1588,7 +1686,7 @@ class VtoCodes extends VtoBase {
     if (type === "confirm") {
       p.innerHTML = `<h3>Bevestigen</h3><div class="row">${text}</div>
         <div class="row"><button class="btn danger" id="ok">Bevestigen</button><button class="btn" id="cancel">Annuleren</button></div>`;
-      p.querySelector("#ok").addEventListener("click", () => this._run({ action: act, entry: e.id }, act === "retire" ? "Uit dienst gehaald" : "Definitief verwijderd"));
+      p.querySelector("#ok").addEventListener("click", () => this._run({ action: act, entry: e.id }, act === "retire" ? (this._userMode ? "Gestopt" : "Uit dienst gehaald") : "Definitief verwijderd"));
     } else if (type === "block") {
       // standaard morgen om dit uur, in de tijdzone van Home Assistant (niet die van de browser)
       const parts = Object.fromEntries(new Intl.DateTimeFormat("en-CA", { timeZone: (this._hass.config || {}).time_zone || undefined,
@@ -1704,7 +1802,12 @@ class VtoCodes extends VtoBase {
     let res = null, ok = false;
     try {
       for (const msg of Array.isArray(msgs) ? msgs : [msgs]) {
-        const data = { type: "btechnics_vto/manage/action", ...msg };
+        let data = { type: "btechnics_vto/manage/action", ...msg };
+        if (this._userMode) {
+          // gebruiker: eigen commando's (de grenzen worden in Home Assistant nagekeken)
+          const { action, ...rest } = msg;
+          data = { type: action === "add" ? "btechnics_vto/user/add" : "btechnics_vto/user/stop", ...rest };
+        }
         Object.keys(data).forEach((k) => { if (data[k] === "") delete data[k]; });
         res = await this._ws(data);
       }
@@ -1809,6 +1912,15 @@ function wireHelp(root, doc, openTab) {
   });
 }
 
+const RIGHTS_TABLE = hpTable([["<b>Onderdeel</b>", "<b>Beheerder</b>", "<b>Gebruiker</b>"],
+  ["Overzicht", "Alles: laatste toegangen met naam, uur en foto, Deur openen", "Status en aantallen van vandaag"],
+  ["Historiek", "Alles: zoeken, per persoon, per dag, foto's, CSV", "Enkel aantallen per dag en per deur, zonder namen, uren of foto's"],
+  ["Tijdelijke code", "Ja, onbeperkt", "Ja: code door Home Assistant gekozen, maximaal 7 dagen geldig, maximaal 10 tegelijk"],
+  ["Eigen tijdelijke codes", "Ja", "Opnieuw delen en stoppen zolang ze lopen"],
+  ["Codes en badges van anderen", "Ja", "Nee, ook niet de aantallen"],
+  ["Vaste codes, badges, blokkeren, uit dienst", "Ja", "Nee"],
+  ["Wijzigingen", "Ja, met de naam van wie iets deed (ook gebruikers)", "Nee"],
+  ["Sensoren Laatste unlock", "Zonder naam, enkel hoe (bv. Geopend via code)", "Zelfde"]]);
 const HELP_DOC = {
   hint: "bv. tijdelijke code of badge",
   tasks: [
@@ -1833,11 +1945,12 @@ const HELP_DOC = {
       steps: ["Open <b>Historiek</b>.", "Zoek op naam of kies een deur, geopend of geweigerd, en een periode. Op de gsm staan deur, resultaat, periode en CSV achter de knop <b>Filters</b>; actieve filters staan eronder als blauwe knopjes, tik erop om ze te wissen.", "Klik op <b>Per persoon</b> voor een overzicht per persoon; klik op een naam om te filteren.", "Klik op <b>Per dag</b> voor een lijst per dag (toegangen, geopend, geweigerd, personen, eerste en laatste, per deur); klik op een dag voor alle toegangen van die dag. Het kruisje bij Dag wist die filter.", "Het camera-icoon in de laatste kolom opent de foto van die toegang. <b>CSV</b> geeft alles voor Excel."] },
   ],
   topics: [
-    { title: "Overzicht", sub: "Status per deur, laatste toegang, deur openen", html: hpTable([["Kaart per deur", "Online of Offline, laatste toegang (wie, hoe, wanneer) met foto, aantallen van vandaag, codes en badges"], ["Deur openen", "Enkel beheerders, met bevestiging"], ["Recente toegangen", "De laatste 6 van die deur: tijd (vandaag enkel het uur), naam, icoon voor de methode, vinkje geopend of kruisje geweigerd, camera voor de foto. Ga met de muis over een rij voor alle details, of tik op de rij om de volledige naam te zien"]]) },
+    { title: "Overzicht", sub: "Status per deur, laatste toegang, deur openen", html: hpTable([["Kaart per deur", "Online of Offline, laatste toegang (wie, hoe, wanneer) met foto, aantallen van vandaag, codes en badges"], ["Deur openen", "Enkel beheerders, met bevestiging"], ["Gebruikers", "Zien enkel de status en de aantallen van vandaag"], ["Recente toegangen", "De laatste 6 van die deur: tijd (vandaag enkel het uur), naam, icoon voor de methode, vinkje geopend of kruisje geweigerd, camera voor de foto. Ga met de muis over een rij voor alle details, of tik op de rij om de volledige naam te zien"]]) },
     { title: "Historiek", sub: "Toegangen van het laatste jaar", html: `<p>Filters: zoeken, deur, status, periode (vandaag tot 1 jaar of eigen). Weergave Toegangen, Per persoon of Per dag. CSV voor Excel.</p>` + hpTable([["Binnenpost 9901, 9902, 9903", "Geopend via die binnenpost"], ["Op afstand", "Geopend met Deur openen; bij Hoe staat wie"], ["Foute code", "Een code die niet bestaat of niet geldig is voor die deur"], ["Onbekende badge", "Een badge die niet gekend is"], ["Ongeldige invoer", "Onvolledige invoer op het klavier"], ["Exitknop", "Geopend met de knop binnen"]]) },
     { title: "Codes en badges", sub: "Statussen en knoppen", html: hpTable([["Alles (tab)", "Eerste tab: alle codes en badges, ook uit dienst"], ["Code tonen", "Klik op de puntjes om die ene code te zien, nog eens klikken verbergt ze; Codes tonen toont ze allemaal"], ["Actief", "Staat op de toestellen en werkt"], ["Tijdelijk (tab)", "Alle codes met een geldigheid of eenmalig gebruik die nog niet uit dienst zijn, ook de wachtende"], ["Wacht op begin", "Geldigheid begint later; komt er vanzelf op (of Nu al activeren)"], ["Geblokkeerd", "Tijdelijk van de toestellen, tot een tijdstip of tot deblokkeren"], ["Uit dienst", "Van de toestellen, bewaard en herstelbaar"], ["Eenmalig", "Vervalt na de eerste opening"], ["Wijzigingen", "Onderaan: wie wat wanneer deed, ook de planner en openen op afstand"]]) },
     { title: "Aan de deur", sub: "Hoe open je", html: hpTable([["Code", "Typ <b># code #</b> op het klavier"], ["Badge", "Hou de badge tegen de lezer"], ["Binnenpost", "Opentoets op de binnenpost"]]) },
     { title: "Foto's", sub: "Bij elke toegang, 30 dagen", html: `<p>Bij elke toegang neemt Home Assistant een foto met de camera van de buitenpost. Enkel beheerders zien ze. Na 30 dagen worden ze gewist: de Belgische camerawet laat camerabeelden maximaal een maand bewaren, tenzij als bewijs nodig. Kammerstraat maakt nog geen foto's (camera moet ter plaatse aangezet worden).</p>` },
+    { title: "Rechten", sub: "Wat ziet een gebruiker zonder beheerrechten", html: `<p>Beheerders zijn de gebruikers met de optie Beheerder in Home Assistant (Instellingen, Personen). Alle anderen zijn gebruikers.</p>` + RIGHTS_TABLE },
     { title: "Op de gsm", sub: "Zelfde mogelijkheden, ander uitzicht", html: hpTable([["Oranje knop", "<b>Tijdelijke code</b> rechtsonder op Overzicht, Historiek en Codes en badges"], ["Codes en badges", "Een rij per code of badge, zonder knoppen. Tik op de rij voor Code tonen, Delen, Aanpassen, Blokkeren, Geschiedenis; Uit dienst staat apart onderaan in rood. <b>Nieuw</b> voor een vaste code of badge. Filters als schuifbare rij bovenaan, met Codes en Badges achteraan"], ["Historiek", "Lijst per dag (Vandaag, Gisteren, ...): uur, naam, deur en manier, foto. Tik op een rij voor alle toegangen van die persoon. Filters achter de knop <b>Filters</b>, grafiek ingeklapt"], ["Overzicht", "Per deur de cijfers van vandaag, de laatste 6 toegangen, <b>Alles in Historiek</b> en een grote knop Deur openen (twee keer tikken)"], ["Wijzigingen", "Onderaan, ingeklapt; tik om te tonen"], ["Wanneer", "Zodra de kaart smaller is dan 600 pixels; op een computer blijft alles zoals voordien"]]) },
     { title: "Goed om te weten", sub: "Snelheid en veiligheid", html: hpTable([["Snelheid", "Een actie op een toestel duurt 10 tot 20 seconden"], ["Veiligheid", "Voor elke wijziging wordt het toestel nagekeken; klopt iets niet, dan gebeurt er niets"], ["Niets verloren", "Blokkeren en uit dienst bewaren eerst een kopie"], ["Archief", "Het toestel onthoudt 1000 toegangen; Home Assistant bewaart ze 400 dagen"]]) },
   ],
@@ -1849,11 +1962,33 @@ const HELP_DOC = {
   foot: "Bron bewaartermijn camerabeelden: besafe.be.",
 };
 
+// handleiding voor een gebruiker zonder beheerrechten: enkel wat hij zelf kan doen
+const HELP_USER = {
+  hint: "bv. tijdelijke code",
+  tasks: [
+    { icon: "mdi:timer-outline", title: "Tijdelijke code maken en delen", sub: "Pakket, technicus of gast", tab: "codes", tabName: "Tijdelijke codes",
+      steps: ["Klik op <b>Tijdelijke code</b>. Op de gsm: de oranje knop rechtsonder, op elk tabblad.", "Kies <b>Pakket</b>, <b>Technicus</b>, <b>Gast</b> of <b>Andere</b>; pas de naam aan, bv. \"Pakket bol\".", "Vink de deur of deuren aan.", "Kies hoe lang: 1 uur, Vandaag, 24 uur, 3 dagen, 1 week, of <b>Van … tot …</b> (maximaal 7 dagen).", "Laat <b>Eenmalig</b> aan voor een pakket.", "Klik op <b>Maak code en deel</b> en kies WhatsApp, Sms, Mail of Kopieer tekst."],
+      tip: "Home Assistant kiest de code. Je kan maximaal 10 tijdelijke codes tegelijk actief hebben. Alles wat je doet komt met je naam bij de beheerders." },
+    { icon: "mdi:share-variant", title: "Een tijdelijke code opnieuw delen", sub: "Zolang ze loopt", tab: "codes", tabName: "Tijdelijke codes",
+      steps: ["Open <b>Tijdelijke codes</b>.", "Klik bij de code op <b>Delen</b> (op de gsm: tik op de rij, dan <b>Delen</b>).", "Kies WhatsApp, Sms, Mail of Kopieer tekst."], tip: "De code zelf staat enkel in de deeltekst." },
+    { icon: "mdi:stop-circle-outline", title: "Een tijdelijke code stoppen", sub: "Werkt meteen niet meer", tab: "codes", tabName: "Tijdelijke codes",
+      steps: ["Open <b>Tijdelijke codes</b>.", "Klik bij de code op <b>Stoppen</b> (op de gsm: tik op de rij) en bevestig."] },
+    { icon: "mdi:calendar-month", title: "Zien hoeveel toegangen er waren", sub: "Per dag en per deur", tab: "historiek", tabName: "Historiek",
+      steps: ["Open <b>Historiek</b>.", "Kies een deur en een periode.", "Je ziet per dag het aantal toegangen, geopend en geweigerd, en per deur."] },
+  ],
+  topics: [
+    { title: "Wat mag ik als gebruiker?", sub: "Rechten in een tabel", html: RIGHTS_TABLE },
+    { title: "Aan de deur", sub: "Hoe open je", html: hpTable([["Code", "Typ <b># code #</b> op het klavier"], ["Badge", "Hou de badge tegen de lezer"]]) },
+  ],
+  terms: [["Tijdelijke code", "Code van 6 cijfers met een begin en einde; na het einde werkt ze vanzelf niet meer"], ["Eenmalig", "Vervalt na de eerste opening"], ["Stoppen", "De code werkt meteen niet meer"]],
+};
+
 class VtoHandleiding extends VtoBase {
   _init() {
+    const doc = isAdmin(this._hass) ? HELP_DOC : HELP_USER;
     this.shadowRoot.innerHTML = `<style>${BASE_CSS}${HELP_CSS}</style>
-    <ha-card><div class="title">${esc(this._config.title || "Handleiding toegangscontrole")}</div><div id="hb">${helpHtml(HELP_DOC)}</div></ha-card>`;
-    wireHelp(this.shadowRoot.getElementById("hb"), HELP_DOC, (view) => {
+    <ha-card><div class="title">${esc(this._config.title || "Handleiding toegangscontrole")}</div><div id="hb">${helpHtml(doc)}</div></ha-card>`;
+    wireHelp(this.shadowRoot.getElementById("hb"), doc, (view) => {
       // naar een andere pagina van hetzelfde dashboard
       const base = location.pathname.split("/").slice(0, 2).join("/");
       history.pushState(null, "", `${base}/${view}`);
@@ -1869,7 +2004,7 @@ class VtoHandleiding extends VtoBase {
 // exist"). Daarom registreren we opnieuw zolang het nodig is, telkens via window.customElements
 // (het register dat NU actief is) en met een nieuwe subklasse (een constructor mag maar een keer).
 const CARD_CLASSES = [["btechnics-vto-overzicht", VtoOverzicht], ["btechnics-vto-toegang", VtoToegang], ["btechnics-vto-codes", VtoCodes], ["btechnics-vto-handleiding", VtoHandleiding]];
-const CARDS_VERSION = "0.9.2";
+const CARDS_VERSION = "0.10.0";
 const define = (name, cls) => {
   if (window.customElements.get(name)) return;
   try {

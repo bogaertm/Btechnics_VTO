@@ -11,6 +11,15 @@ from homeassistant.util import dt as dt_util
 from .const import DOMAIN
 
 ARCHIVE_KEY = f"{DOMAIN}_archive"
+USER_OPS_KEY = f"{DOMAIN}_user_ops"
+# gebruikers zonder beheerrechten: enkel eigen tijdelijke codes, met deze grenzen
+USER_MAX_ACTIVE = 10
+USER_MAX_DAYS = 7
+USER_MAX_AHEAD_DAYS = 31
+
+
+def _admin(connection) -> bool:
+    return bool(connection.user and connection.user.is_admin)
 
 
 def _coords(hass):
@@ -27,6 +36,10 @@ def async_register(hass: HomeAssistant):
     websocket_api.async_register_command(hass, ws_codes)
     websocket_api.async_register_command(hass, ws_manage_list)
     websocket_api.async_register_command(hass, ws_manage_action)
+    websocket_api.async_register_command(hass, ws_user_codes)
+    websocket_api.async_register_command(hass, ws_user_add)
+    websocket_api.async_register_command(hass, ws_user_stop)
+    websocket_api.async_register_command(hass, ws_user_days)
 
 
 def _no_card(r):
@@ -89,7 +102,13 @@ async def ws_doors(hass, connection, msg):
                             u["photo"] = one[0]["photo"]
         except Exception:  # noqa: BLE001  foto's zijn een extraatje
             pass
-    connection.send_result(msg["id"], {"doors": doors, "archive": stats, "time_zone": hass.config.time_zone})
+    admin = _admin(connection)
+    if not admin:
+        # gebruiker zonder beheerrechten: enkel status en aantallen van vandaag, geen namen, uren of foto's
+        for d in doors:
+            d.update(last_unlock=None, recent=[], codes=None, cards=None)
+        stats = {}
+    connection.send_result(msg["id"], {"doors": doors, "archive": stats, "time_zone": hass.config.time_zone, "admin": admin})
 
 
 @websocket_api.require_admin
@@ -200,6 +219,13 @@ async def ws_manage_list(hass, connection, msg):
                 "stored": sorted(({"id": d, "name": names.get(d, d)} for d in m["stored"]), key=lambda x: x["name"].lower()),
             })
     entries.sort(key=lambda e: (e["name"].lower(), e["kind"]))
+    if mgr is not None:
+        # wie de tijdelijke code maakte (gebruiker zonder beheerrechten)
+        for e in entries:
+            uid = mgr.reg.managed[e["id"]].get("owner")
+            if uid:
+                u = await hass.auth.async_get_user(uid)
+                e["owner_name"] = u.name if u and u.name else "onbekend"
     doors = [{"id": did, "name": c.door_name} for did, c in sorted(coords.items(), key=lambda x: x[1].door_name.lower())]
     audit = list(reversed(mgr.reg.audit[-200:])) if mgr is not None else []
     # onbekende badges van de laatste 14 dagen (voor Nieuwe badge), zonder badges die al in de lijst staan
@@ -262,3 +288,164 @@ async def ws_manage_action(hass, connection, msg):
         connection.send_error(msg["id"], "failed", str(e))
         return
     connection.send_result(msg["id"], {"ok": True, "result": res})
+
+
+# ---------------------------------------------------------------- gebruikers zonder beheerrechten
+
+def _entry_out(cid, m, names):
+    from .registry import secret
+    return {
+        "id": cid, "kind": m["kind"], "name": m["name"], "secret": secret(m), "status": m["status"],
+        "until": m.get("until"), "valid_from": m.get("valid_from"), "valid_until": m.get("valid_until"),
+        "max_uses": m.get("max_uses"), "uses": m.get("uses") or 0, "created": m.get("created"),
+        "doors": sorted(({"id": d, "name": names.get(d, d)} for d in m["doors"]), key=lambda x: x["name"].lower()),
+        "stored": sorted(({"id": d, "name": names.get(d, d)} for d in m["stored"]), key=lambda x: x["name"].lower()),
+    }
+
+
+def _own_codes(mgr, uid):
+    return [(cid, m) for cid, m in mgr.reg.managed.items() if m.get("kind") == "code" and m.get("owner") == uid]
+
+
+@websocket_api.websocket_command({vol.Required("type"): f"{DOMAIN}/user/codes"})
+@callback
+def ws_user_codes(hass, connection, msg):
+    """Eigen tijdelijke codes (ook voor gebruikers zonder beheerrechten); uit dienst enkel de laatste 7 dagen."""
+    from .manage import MANAGER_KEY
+    mgr = hass.data.get(MANAGER_KEY)
+    coords = _coords(hass)
+    names = {did: c.door_name for did, c in coords.items()}
+    recent = (dt_util.now() - timedelta(days=7)).isoformat()
+    entries = []
+    if mgr is not None and connection.user:
+        for cid, m in _own_codes(mgr, connection.user.id):
+            if m["status"] == "retired" and (m.get("updated") or "") < recent:
+                continue
+            entries.append(_entry_out(cid, m, names))
+    entries.sort(key=lambda e: (e["status"] == "retired", e.get("valid_until") or "", e["name"].lower()))
+    doors = [{"id": did, "name": c.door_name} for did, c in sorted(coords.items(), key=lambda x: x[1].door_name.lower())]
+    connection.send_result(msg["id"], {"doors": doors, "entries": entries, "audit": [], "unknown_cards": [], "admin": _admin(connection),
+                                       "limits": {"active": USER_MAX_ACTIVE, "days": USER_MAX_DAYS, "ahead_days": USER_MAX_AHEAD_DAYS}})
+
+
+def _local_dt(value: str):
+    v = dt_util.parse_datetime(value)
+    if v is None:
+        raise ValueError(f"ongeldig tijdstip: {value}")
+    if v.tzinfo is None:
+        v = v.replace(tzinfo=dt_util.get_default_time_zone())
+    return dt_util.as_utc(v)
+
+
+@websocket_api.websocket_command({
+    vol.Required("type"): f"{DOMAIN}/user/add",
+    vol.Required("name"): vol.All(str, vol.Length(min=1, max=30)),
+    vol.Required("doors"): vol.All([str], vol.Length(min=1)),
+    vol.Optional("valid_from"): str,
+    vol.Required("valid_until"): str,
+    vol.Optional("max_uses"): vol.In([1]),
+})
+@websocket_api.async_response
+async def ws_user_add(hass, connection, msg):
+    """Tijdelijke code maken als gebruiker: code door Home Assistant gekozen, maximaal 7 dagen, maximaal 10 actief."""
+    from types import SimpleNamespace
+    from homeassistant.exceptions import HomeAssistantError
+    from .manage import MANAGER_KEY
+    mgr, ops = hass.data.get(MANAGER_KEY), hass.data.get(USER_OPS_KEY)
+    if mgr is None or ops is None or not connection.user:
+        connection.send_error(msg["id"], "not_ready", "nog niet klaar")
+        return
+    try:
+        vuntil = _local_dt(msg["valid_until"])
+        vfrom = _local_dt(msg["valid_from"]) if msg.get("valid_from") else None
+    except ValueError as e:
+        connection.send_error(msg["id"], "invalid_format", str(e))
+        return
+    now = dt_util.utcnow()
+    start = max(now, vfrom) if vfrom else now
+    err = None
+    if vuntil <= now:
+        err = "het einde ligt in het verleden"
+    elif vfrom and vuntil <= vfrom:
+        err = "het einde moet na het begin liggen"
+    elif vuntil - start > timedelta(days=USER_MAX_DAYS, minutes=1):
+        err = f"een tijdelijke code is maximaal {USER_MAX_DAYS} dagen geldig"
+    elif vfrom and vfrom - now > timedelta(days=USER_MAX_AHEAD_DAYS):
+        err = f"het begin mag maximaal {USER_MAX_AHEAD_DAYS} dagen vooruit liggen"
+    elif sum(1 for _, m in _own_codes(mgr, connection.user.id) if m["status"] != "retired") >= USER_MAX_ACTIVE:
+        err = f"je hebt al {USER_MAX_ACTIVE} actieve tijdelijke codes; stop er eerst een"
+    if err:
+        connection.send_error(msg["id"], "failed", err)
+        return
+    data = {"name": msg["name"].strip(), "doors": msg["doors"], "valid_until": vuntil}
+    if vfrom and vfrom > now:
+        data["valid_from"] = vfrom
+    if msg.get("max_uses"):
+        data["max_uses"] = 1
+    try:
+        res = await ops["add"](SimpleNamespace(data=data, context=connection.context(msg)))
+    except (HomeAssistantError, vol.Invalid) as e:
+        connection.send_error(msg["id"], "failed", str(e))
+        return
+    cid = res and res.get("id")
+    if cid in mgr.reg.managed:
+        mgr.reg.managed[cid]["owner"] = connection.user.id
+        await mgr.reg.save()
+    connection.send_result(msg["id"], {"ok": True, "id": cid, "result": {"id": cid}})
+
+
+@websocket_api.websocket_command({vol.Required("type"): f"{DOMAIN}/user/stop", vol.Required("entry"): str})
+@websocket_api.async_response
+async def ws_user_stop(hass, connection, msg):
+    """Eigen tijdelijke code stoppen (uit dienst)."""
+    from types import SimpleNamespace
+    from homeassistant.exceptions import HomeAssistantError
+    from .manage import MANAGER_KEY
+    mgr, ops = hass.data.get(MANAGER_KEY), hass.data.get(USER_OPS_KEY)
+    m = mgr.reg.managed.get(msg["entry"]) if mgr is not None else None
+    if m is None or ops is None or not connection.user or (m.get("owner") != connection.user.id and not _admin(connection)):
+        connection.send_error(msg["id"], "not_found", "onbekende code")
+        return
+    if m["status"] == "retired":
+        connection.send_error(msg["id"], "failed", "deze code is al gestopt")
+        return
+    try:
+        await ops["retire"](SimpleNamespace(data={"id": msg["entry"]}, context=connection.context(msg)))
+    except (HomeAssistantError, vol.Invalid) as e:
+        connection.send_error(msg["id"], "failed", str(e))
+        return
+    connection.send_result(msg["id"], {"ok": True})
+
+
+@websocket_api.websocket_command({
+    vol.Required("type"): f"{DOMAIN}/user/days",
+    vol.Optional("door_ids"): [str],
+    vol.Optional("days"): vol.All(vol.Coerce(int), vol.Range(min=1, max=400)),
+    vol.Optional("date_from"): vol.Match(r"^\d{4}-\d{2}-\d{2}$"),
+    vol.Optional("date_to"): vol.Match(r"^\d{4}-\d{2}-\d{2}$"),
+})
+@websocket_api.async_response
+async def ws_user_days(hass, connection, msg):
+    """Beperkte historiek voor elke gebruiker: enkel aantallen per dag en per deur, geen namen, uren of foto's."""
+    archive = hass.data.get(ARCHIVE_KEY)
+    if archive is None:
+        connection.send_error(msg["id"], "not_ready", "Toegangsarchief is nog niet geladen")
+        return
+    kw = {"limit": 0}
+    if msg.get("door_ids"):
+        kw["door_ids"] = msg["door_ids"]
+    try:
+        kw["start"] = _date_start(msg["date_from"]) if "date_from" in msg else _day_start(hass, msg.get("days", 30) - 1)
+        if "date_to" in msg:
+            kw["end"] = _date_start(msg["date_to"], 1)
+    except ValueError as e:
+        connection.send_error(msg["id"], "invalid_format", f"ongeldige datum: {e}")
+        return
+    if kw["start"] < _day_start(hass, 399):
+        kw["start"] = _day_start(hass, 399)
+    tz = dt_util.get_default_time_zone()
+    r = await hass.async_add_executor_job(lambda: archive.query(tz, **kw))
+    connection.send_result(msg["id"], {
+        "total": r["total"], "opened": r["opened"], "refused": r["refused"],
+        "days": [{"day": d["day"], "count": d["count"], "opened": d["opened"], "refused": d["refused"], "doors": d["doors"]} for d in r["days"]],
+    })

@@ -886,6 +886,11 @@ def _register_services(hass: HomeAssistant):
         user = await mgr.user_name(call.context)
         return await mgr.guarded(mgr.forget, call.data["id"], user)
 
+    # voor de WebSocket-commando's van gebruikers zonder beheerrechten (eigen tijdelijke codes; de grenzen en
+    # de eigenaar controleert websocket.py vóór de aanroep)
+    from .websocket import USER_OPS_KEY
+    hass.data[USER_OPS_KEY] = {"add": add_code, "retire": retire}
+
     async def rename_badge(call: ServiceCall):
         name = call.data["name"].strip()
         if not name:
