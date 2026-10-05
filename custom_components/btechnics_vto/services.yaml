@@ -236,3 +236,17 @@ reboot:
       required: true
       example: "Kammerstraat"
       selector: { text: {} }
+
+set_photos:
+  name: Foto's per deur
+  description: Foto bij elke toegang aan of uit zetten voor een deur. Enkel beheerders.
+  fields:
+    door:
+      name: Deur
+      required: true
+      example: Kammerstraat
+      selector: { text: {} }
+    enabled:
+      name: Foto's aan
+      required: true
+      selector: { boolean: {} }

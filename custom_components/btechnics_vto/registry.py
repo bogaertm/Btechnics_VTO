@@ -35,6 +35,7 @@ class CodeRegistry:
         self.protected: dict = {}    # door_id -> [recno, ...]  (snapshot bestaande codes)
         self.log_state: dict = {}    # door_id -> {"tail": [recordsleutels], "t": epoch laatste record, "len": buffergrootte}
         self.audit: list = []        # wijzigingen: wie, wat, wanneer (recentste laatst)
+        self.photos_off: list = []   # deuren zonder foto bij toegang (keuze beheerder)
 
     async def load(self):
         data = await self._store.async_load() or {}
@@ -42,12 +43,13 @@ class CodeRegistry:
         self.protected = data.get("protected", {})
         self.log_state = data.get("log_state", {})
         self.audit = data.get("audit", [])
+        self.photos_off = data.get("photos_off", [])
         for m in self.managed.values():
             _defaults(m)
 
     async def save(self):
         await self._store.async_save({"managed": self.managed, "protected": self.protected, "log_state": self.log_state,
-                                      "audit": self.audit})
+                                      "audit": self.audit, "photos_off": self.photos_off})
 
     async def snapshot_protected(self, door_id: str, recnos: list):
         """Enkel bij de eerste keer dat een deur gezien wordt: alle bestaande RecNo's vergrendelen."""

@@ -31,7 +31,7 @@ from .websocket import async_register as async_register_websocket
 
 _LOGGER = logging.getLogger(__name__)
 PLATFORMS = ["sensor"]
-SERVICES = ["add_code", "set_validity", "open_door", "reboot", "update_code", "remove_code", "refresh", "list_codes", "list_log", "device_time", "sync_clock",
+SERVICES = ["set_photos", "add_code", "set_validity", "open_door", "reboot", "update_code", "remove_code", "refresh", "list_codes", "list_log", "device_time", "sync_clock",
             "block", "unblock", "retire", "restore", "forget", "rename_badge", "add_badge", "camera_probe"]
 
 # Eén gedeeld register voor ALLE config entries en voor de hele levensduur van Home Assistant:
@@ -223,7 +223,9 @@ def _start_events(hass: HomeAssistant, entry: ConfigEntry, c):
         data = ev.get("Data") or {}
         info = json.dumps({k: data.get(k) for k in ("Method", "Status", "UserID", "Name") if k in data})
         photos = hass.data.get(PHOTO_KEY)
-        if photos is not None and cam.may_shoot() and time.time() >= fails["until"]:
+        reg = hass.data.get(REG_KEY)
+        off = reg is not None and c.door_id in getattr(reg, "photos_off", [])
+        if photos is not None and not off and cam.may_shoot() and time.time() >= fails["until"]:
             t = int(time.time())
             try:
                 img = await cam.grab()
@@ -938,6 +940,25 @@ def _register_services(hass: HomeAssistant):
     # de eigenaar controleert websocket.py vóór de aanroep)
     from .websocket import USER_OPS_KEY
     hass.data[USER_OPS_KEY] = {"add": add_code, "retire": retire}
+
+    async def set_photos(call: ServiceCall):
+        """Foto bij toegang aan of uit per deur (bv. Kammerstraat: niet nodig, keuze Matthias 05/10)."""
+        coords = _all_coords(hass)
+        did = _door_ids(coords, [call.data["door"]])[0]
+        reg = _reg()
+        off = set(reg.photos_off)
+        if call.data["enabled"]:
+            off.discard(did)
+        else:
+            off.add(did)
+        reg.photos_off = sorted(off)
+        user = await mgr.user_name(call.context)
+        reg.log(user, "foto's " + ("aan" if call.data["enabled"] else "uit"), {"kind": "deur", "name": coords[did].door_name}, [coords[did].door_name])
+        await reg.save()
+        return {"door": did, "photos": bool(call.data["enabled"])}
+
+    async_register_admin_service(hass, DOMAIN, "set_photos", set_photos, vol.Schema({
+        vol.Required("door"): cv.string, vol.Required("enabled"): cv.boolean}), supports_response=SupportsResponse.OPTIONAL)
 
     async def rename_badge(call: ServiceCall):
         name = call.data["name"].strip()

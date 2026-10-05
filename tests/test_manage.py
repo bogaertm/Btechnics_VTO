@@ -730,3 +730,12 @@ def test_zeven_dagen_over_de_wissel_naar_wintertijd():
     a = datetime(2026, 10, 20, 12, 0, tzinfo=tz)
     b = datetime(2026, 10, 27, 12, 0, tzinfo=tz)
     assert _local_span(b, a) == timedelta(days=7)
+
+
+
+async def test_fotos_per_deur_uit(hass, devices):
+    await setup_two_entries(hass)
+    await call(hass, "set_photos", {"door": "Kammerstraat", "enabled": False})
+    assert reg(hass).photos_off == ["kammerstraat"] and reg(hass).audit[-1]["action"] == "foto's uit"
+    await call(hass, "set_photos", {"door": "kammerstraat", "enabled": True})
+    assert reg(hass).photos_off == []
