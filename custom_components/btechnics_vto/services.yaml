@@ -18,10 +18,6 @@ add_code:
       required: true
       example: '["Café", "Kammerstraat"]'
       selector: { object: {} }
-    max_uses:
-      name: Maximaal aantal keer
-      description: Optioneel. Na zoveel geslaagde openingen gaat de code automatisch uit dienst (1 = eenmalig).
-      selector: { number: { min: 1, max: 100, mode: box } }
     valid_from:
       name: Geldig vanaf
       description: Optioneel. Begint de geldigheid later, dan komt de code pas op dat moment op de toestellen.

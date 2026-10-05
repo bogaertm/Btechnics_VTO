@@ -404,11 +404,11 @@ async def test_gebruiker_zonder_beheerrechten(hass, devices, hass_ws_client, has
     assert not (await ws(ro, type=f"{DOMAIN}/manage/action", action="add", name="X", code="445566", doors=["cafe"]))["success"]
     r = await ws(ro, type=f"{DOMAIN}/user/add", name="Pakket", doors=["cafe"], valid_until=loc(timedelta(days=8)))
     assert not r["success"] and "7 dagen" in r["error"]["message"]
-    r = await ws(ro, type=f"{DOMAIN}/user/add", name="Pakket", doors=["cafe"], valid_until=loc(timedelta(hours=5)), max_uses=1)
+    r = await ws(ro, type=f"{DOMAIN}/user/add", name="Pakket", doors=["cafe"], valid_until=loc(timedelta(hours=5)))
     assert r["success"], r
     cid = r["result"]["id"]
     m = reg(hass).managed[cid]
-    assert m["owner"] and m["max_uses"] == 1 and len(on(cafe, m["name"], m["code"])) == 1    # code door HA gekozen
+    assert m["owner"] and not m.get("max_uses") and len(on(cafe, m["name"], m["code"])) == 1    # code door HA gekozen
     lst = (await ws(ro, type=f"{DOMAIN}/user/codes"))["result"]
     assert [e["id"] for e in lst["entries"]] == [cid] and lst["admin"] is False and lst["limits"]["active"] == 10
     # andermans code stoppen kan niet
@@ -611,30 +611,39 @@ async def test_begin_later_blijft_gerespecteerd(hass, devices):
     assert reg(hass).managed[cid]["status"] == "active" and len(on(cafe, "Adriaan")) == 1
 
 
-async def test_eenmalige_code_met_automatische_code(hass, devices):
+async def test_geen_eenmalige_codes_meer(hass, devices):
+    """Eenmalig bestaat niet meer (keuze Matthias 05/10): de service weigert max_uses, een code blijft werken na gebruik,
+    en een oude limiet op een bestaande code verdwijnt bij het opstarten."""
+    import voluptuous as vol
     from custom_components.btechnics_vto.const import EVENT_UNLOCK
     cafe, _ = devices
     await setup_two_entries(hass)
-    res = await call(hass, "add_code", {"name": "Pakket 26/9", "doors": ["Cafe"], "max_uses": 1,
-                                        "valid_until": (dt_util.now() + timedelta(hours=24)).replace(tzinfo=None)}, True)
+    until = (dt_util.now() + timedelta(hours=24)).replace(tzinfo=None)
+    with pytest.raises(vol.Invalid):
+        await call(hass, "add_code", {"name": "Pakket", "doors": ["Cafe"], "max_uses": 1, "valid_until": until}, True)
+    res = await call(hass, "add_code", {"name": "Pakket 26/9", "doors": ["Cafe"], "valid_until": until}, True)
     code = res["code"]
     assert len(code) == 6 and code.isdigit() and len(on(cafe, "Pakket 26/9", code)) == 1
-    hass.bus.async_fire(EVENT_UNLOCK, {"name": "Pakket 26/9", "method": "code", "opened": False})   # geweigerd telt niet
-    await hass.async_block_till_done()
-    assert reg(hass).managed[res["id"]]["status"] == "active"
-    hass.bus.async_fire(EVENT_UNLOCK, {"name": "Pakket 26/9", "method": "code", "opened": True})
-    await hass.async_block_till_done()
-    m = reg(hass).managed[res["id"]]
-    assert m["status"] == "retired" and on(cafe, "Pakket 26/9") == []
-    assert reg(hass).audit[-1]["detail"] == "eenmalig gebruikt"
-    # herstellen: de code moet daarna blijven werken (Designmuseum 04/10 ging na herstellen bij de volgende opening weer uit dienst)
-    await call(hass, "restore", {"id": res["id"]})
-    m = reg(hass).managed[res["id"]]
-    assert m["status"] == "active" and not m.get("max_uses") and m["valid_until"] and len(on(cafe, "Pakket 26/9", code)) == 1
-    for _ in range(2):
+    for _ in range(3):
         hass.bus.async_fire(EVENT_UNLOCK, {"name": "Pakket 26/9", "method": "code", "opened": True})
         await hass.async_block_till_done()
-    assert reg(hass).managed[res["id"]]["status"] == "active"
+    m = reg(hass).managed[res["id"]]
+    assert m["status"] == "active" and not m.get("max_uses")
+
+
+async def test_oude_eenmalige_limiet_weg_bij_opstarten(hass, devices):
+    from custom_components.btechnics_vto import _register_services  # noqa: F401
+    from custom_components.btechnics_vto.manage import MANAGER_KEY
+    await setup_two_entries(hass)
+    cid, m = entry(hass, "Adriaan")
+    m["max_uses"], m["uses"] = 1, 0
+    # opnieuw opstarten van de services (zoals na een herstart): de limiet moet weg zijn
+    for svc in list(hass.services.async_services().get(DOMAIN, {})):
+        hass.services.async_remove(DOMAIN, svc)
+    hass.data.pop(MANAGER_KEY).stop()
+    from custom_components.btechnics_vto import _register_services as rs
+    rs(hass)
+    assert not reg(hass).managed[cid].get("max_uses")
 
 
 def test_zwakke_codes_niet_gekozen():

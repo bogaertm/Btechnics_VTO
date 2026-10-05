@@ -246,7 +246,7 @@ async def ws_manage_list(hass, connection, msg):
 
 ACTIONS = {
     # actie: (service, velden, antwoord)
-    "add": ("add_code", ("name", "code", "doors", "valid_from", "valid_until", "max_uses"), True),
+    "add": ("add_code", ("name", "code", "doors", "valid_from", "valid_until"), True),
     "validity": ("set_validity", ("id", "valid_from", "valid_until"), True),
     "update": ("update_code", ("id", "name", "code", "doors"), True),
     "rename_badge": ("rename_badge", ("id", "name"), True),
@@ -272,7 +272,6 @@ ACTIONS = {
     vol.Optional("until"): str,
     vol.Optional("valid_from"): str,
     vol.Optional("valid_until"): str,
-    vol.Optional("max_uses"): int,
 })
 @websocket_api.async_response
 async def ws_manage_action(hass, connection, msg):
@@ -361,7 +360,6 @@ def _local_dt(value: str):
     vol.Required("doors"): vol.All([str], vol.Length(min=1)),
     vol.Optional("valid_from"): str,
     vol.Required("valid_until"): str,
-    vol.Optional("max_uses"): vol.In([1]),
 })
 @websocket_api.async_response
 async def ws_user_add(hass, connection, msg):
@@ -401,8 +399,6 @@ async def ws_user_add(hass, connection, msg):
             "owner": connection.user.id, "owner_limit": USER_MAX_ACTIVE}
     if vfrom and vfrom > now:
         data["valid_from"] = vfrom
-    if msg.get("max_uses"):
-        data["max_uses"] = 1
     try:
         res = await ops["add"](SimpleNamespace(data=data, context=connection.context(msg)))
     except (HomeAssistantError, vol.Invalid) as e:

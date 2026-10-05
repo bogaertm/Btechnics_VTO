@@ -442,6 +442,14 @@ def _register_services(hass: HomeAssistant):
 
     mgr = Manager(hass, hass.data[REG_KEY], write_lock, lambda: _all_coords(hass))
     hass.data[MANAGER_KEY] = mgr
+    # Geen eenmalige codes meer (keuze Matthias 05/10): een oude limiet op een bestaande code wegnemen,
+    # zodat geen enkele code nog vanzelf na gebruik uit dienst gaat.
+    _old = [m for m in mgr.reg.managed.values() if m.get("max_uses")]
+    for m in _old:
+        m["max_uses"], m["uses"] = None, 0
+    if _old:
+        hass.async_create_task(mgr.reg.save())
+        _LOGGER.info("Eenmalig weggenomen bij %s bestaande code(s)", len(_old))
     mgr.start()
 
     async def _guarded(fn, call):
@@ -834,8 +842,8 @@ def _register_services(hass: HomeAssistant):
     async_register_admin_service(hass, DOMAIN, "add_code", add_code, vol.Schema({
         vol.Required("name"): cv.string, vol.Optional("code"): CODE_SCHEMA,
         vol.Required("doors"): vol.All(cv.ensure_list, [cv.string]),
-        vol.Optional("valid_from"): cv.datetime, vol.Optional("valid_until"): cv.datetime,
-        vol.Optional("max_uses"): vol.All(vol.Coerce(int), vol.Range(min=1, max=100))}), supports_response=SupportsResponse.OPTIONAL)
+        vol.Optional("valid_from"): cv.datetime, vol.Optional("valid_until"): cv.datetime}), supports_response=SupportsResponse.OPTIONAL)
+    # (eenmalige codes en max_uses bestaan niet meer sinds v0.11.2, keuze Matthias 05/10)
     async_register_admin_service(hass, DOMAIN, "update_code", update_code, vol.Schema({
         vol.Required("id"): cv.string, vol.Optional("name"): cv.string, vol.Optional("code"): CODE_SCHEMA,
         vol.Optional("doors"): vol.All(cv.ensure_list, [cv.string])}), supports_response=SupportsResponse.OPTIONAL)
