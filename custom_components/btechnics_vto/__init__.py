@@ -903,7 +903,15 @@ def _register_services(hass: HomeAssistant):
 
     async def restore(call: ServiceCall):
         user = await mgr.user_name(call.context)
-        return await mgr.guarded(mgr.unblock, call.data["id"], user, "hersteld", False, True)
+        res = await mgr.guarded(mgr.unblock, call.data["id"], user, "hersteld", False, True)
+        # Een herstelde code moet blijven werken: een opgebruikte limiet (eenmalig) vervalt, anders gaat ze
+        # bij de volgende opening meteen weer uit dienst (vastgesteld 04/10 met Designmuseum). Het einde blijft.
+        m = mgr.reg.managed.get(call.data["id"])
+        if m is not None and m.get("max_uses"):
+            m["max_uses"], m["uses"] = None, 0
+            mgr.reg.log(user, "eenmalig opgeheven", m, [], "bij herstellen")
+            await mgr.reg.save()
+        return res
 
     async def forget(call: ServiceCall):
         user = await mgr.user_name(call.context)

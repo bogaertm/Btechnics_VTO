@@ -627,6 +627,14 @@ async def test_eenmalige_code_met_automatische_code(hass, devices):
     m = reg(hass).managed[res["id"]]
     assert m["status"] == "retired" and on(cafe, "Pakket 26/9") == []
     assert reg(hass).audit[-1]["detail"] == "eenmalig gebruikt"
+    # herstellen: de code moet daarna blijven werken (Designmuseum 04/10 ging na herstellen bij de volgende opening weer uit dienst)
+    await call(hass, "restore", {"id": res["id"]})
+    m = reg(hass).managed[res["id"]]
+    assert m["status"] == "active" and not m.get("max_uses") and m["valid_until"] and len(on(cafe, "Pakket 26/9", code)) == 1
+    for _ in range(2):
+        hass.bus.async_fire(EVENT_UNLOCK, {"name": "Pakket 26/9", "method": "code", "opened": True})
+        await hass.async_block_till_done()
+    assert reg(hass).managed[res["id"]]["status"] == "active"
 
 
 def test_zwakke_codes_niet_gekozen():
