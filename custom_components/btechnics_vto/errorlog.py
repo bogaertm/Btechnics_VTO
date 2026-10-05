@@ -7,6 +7,7 @@ buiten de event loop."""
 from __future__ import annotations
 
 import logging
+import re
 import sqlite3
 import threading
 import time
@@ -30,7 +31,8 @@ class ErrorLog(logging.Handler):
     # ---- logging ----
     def emit(self, record: logging.LogRecord):
         try:
-            msg = record.getMessage()
+            # geheugenadressen en dergelijke weglaten, zodat dezelfde melding samen geteld wordt
+            msg = re.sub(r"0x[0-9a-fA-F]+", "0x…", record.getMessage())
             details = ""
             if record.exc_info:
                 details = "".join(traceback.format_exception(*record.exc_info))[-4000:]

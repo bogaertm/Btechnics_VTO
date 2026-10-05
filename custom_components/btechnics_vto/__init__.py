@@ -215,18 +215,27 @@ def _start_events(hass: HomeAssistant, entry: ConfigEntry, c):
     from urllib.parse import urlparse
     cam = c.camera = DoorCamera(hass, c)
     c.events_state = {"ok": None, "fout": None}
+    # Lukt een foto 3 keer na elkaar niet (bv. Kammerstraat: camera niet bereikbaar), dan een dag pauze en een
+    # enkele melding, in plaats van een waarschuwing bij elke toegang.
+    fails = {"n": 0, "until": 0.0}
 
     async def _on_access(ev):
         data = ev.get("Data") or {}
         info = json.dumps({k: data.get(k) for k in ("Method", "Status", "UserID", "Name") if k in data})
         photos = hass.data.get(PHOTO_KEY)
-        if photos is not None and cam.may_shoot():
+        if photos is not None and cam.may_shoot() and time.time() >= fails["until"]:
             t = int(time.time())
             try:
                 img = await cam.grab()
                 await hass.async_add_executor_job(photos.save, c.door_id, t, img, info)
+                fails["n"] = 0
             except Exception as e:  # noqa: BLE001  geen foto: de toegang zelf gaat gewoon verder
-                _LOGGER.warning("Foto bij toegang op %s mislukt: %s", c.door_name, e)
+                fails["n"] += 1
+                if fails["n"] >= 3:
+                    fails["n"], fails["until"] = 0, time.time() + 86400
+                    _LOGGER.warning("Foto's op %s gepauzeerd voor 24 uur: 3 keer na elkaar mislukt (%s)", c.door_name, str(e)[:200])
+                else:
+                    _LOGGER.debug("Foto bij toegang op %s mislukt: %s", c.door_name, e)
         # logboek meteen inlezen (anders pas bij de volgende uitlezing, tot 30 s later)
         await c.async_request_refresh()
 
