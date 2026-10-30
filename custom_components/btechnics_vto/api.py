@@ -188,7 +188,9 @@ class VTOClient:
             r = self.call("magicBox.getUpTime")
         except Exception as e:  # noqa: BLE001  diagnose
             return {"fout": str(e)[:120]}
-        p = (r.get("params") or {}).get("up") or r.get("params") or {}
+        p = r.get("params") or {}
+        # VTO4202 (firmware 4.511 en 4.600) antwoordt {"info": {"Last": .., "Total": ..}}
+        p = next((v for v in p.values() if isinstance(v, dict) and "Last" in v), p)
         if not r.get("result") or "Last" not in p:
             return {"fout": f"geen: {r.get('error') or r.get('params')}"}
         last = int(p["Last"])

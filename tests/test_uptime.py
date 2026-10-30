@@ -18,6 +18,12 @@ def test_uptime_rekent_starttijd():
     assert abs((datetime.now(timezone.utc) - start).total_seconds() - 3600) < 5
 
 
+def test_uptime_echt_antwoord_vto4202():
+    """Antwoord zoals Cafe en Kammerstraat het gaven op 30/10/2026."""
+    u = _client(lambda m: {"result": True, "params": {"info": {"Last": 542193, "Total": 263764}}}).uptime()
+    assert u["seconden"] == 542193 and u["totaal_seconden"] == 263764
+
+
 def test_uptime_zonder_up_sleutel():
     u = _client(lambda m: {"result": True, "params": {"Last": 10, "Total": 20}}).uptime()
     assert u["seconden"] == 10
