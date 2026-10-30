@@ -9,6 +9,7 @@ from homeassistant.helpers import entity_registry as er
 from homeassistant.util import dt as dt_util
 
 from .const import DOMAIN
+from . import roles
 
 ARCHIVE_KEY = f"{DOMAIN}_archive"
 USER_OPS_KEY = f"{DOMAIN}_user_ops"
@@ -19,7 +20,27 @@ USER_MAX_AHEAD_DAYS = 31
 
 
 def _admin(connection) -> bool:
-    return bool(connection.user and connection.user.is_admin)
+    """Superadmin (HA-beheerder) of de rol Admin: alles zien en beheren (rollen sinds v0.12.0)."""
+    return bool(connection.user) and roles.is_admin(_HASS[0], connection.user) if _HASS else bool(connection.user and connection.user.is_admin)
+
+
+def _staff(connection) -> bool:
+    """Superadmin, Admin of Medewerker."""
+    return bool(connection.user) and roles.is_staff(_HASS[0], connection.user) if _HASS else bool(connection.user and connection.user.is_admin)
+
+
+def _medewerker(connection) -> bool:
+    return _staff(connection) and not _admin(connection)
+
+
+_HASS: list = []
+ROLE_OPS_KEY = f"{DOMAIN}_role_ops"
+MEDEWERKER_MAX_DAYS = 366
+MEDEWERKER_LOG_S = 24 * 3600
+
+
+def _deny(connection, msg) -> None:
+    connection.send_error(msg["id"], "unauthorized", "geen toegang met jouw rol")
 
 
 def _coords(hass):
@@ -31,6 +52,9 @@ def _coords(hass):
 
 @callback
 def async_register(hass: HomeAssistant):
+    _HASS[:] = [hass]
+    websocket_api.async_register_command(hass, ws_me)
+    websocket_api.async_register_command(hass, ws_door_open)
     websocket_api.async_register_command(hass, ws_doors)
     websocket_api.async_register_command(hass, ws_errors)
     websocket_api.async_register_command(hass, ws_history)
@@ -104,15 +128,24 @@ async def ws_doors(hass, connection, msg):
         except Exception:  # noqa: BLE001  foto's zijn een extraatje
             pass
     admin = _admin(connection)
-    if not admin:
-        # gebruiker zonder beheerrechten: enkel status en aantallen van vandaag, geen namen, uren of foto's
+    if not admin and _staff(connection):
+        # medewerker: namen en uren van de laatste toegangen (logboek), maar geen foto's en enkel de laatste 24 uur
+        cut = time.time() - MEDEWERKER_LOG_S
+        for d in doors:
+            d["recent"] = [{k: v for k, v in r.items() if k != "photo"} for r in d["recent"] if (r.get("ts") or 0) >= cut]
+            u = d.get("last_unlock")
+            d["last_unlock"] = {k: v for k, v in u.items() if k != "photo"} if u and (u.get("ts") or 0) >= cut else None
+            d["cards"] = None
+        stats = {}
+    elif not admin:
+        # gebruiker zonder rol: enkel status en aantallen van vandaag, geen namen, uren of foto's
         for d in doors:
             d.update(last_unlock=None, recent=[], codes=None, cards=None)
         stats = {}
-    connection.send_result(msg["id"], {"doors": doors, "archive": stats, "time_zone": hass.config.time_zone, "admin": admin})
+    connection.send_result(msg["id"], {"doors": doors, "archive": stats, "time_zone": hass.config.time_zone, "admin": admin,
+                                       "staff": _staff(connection)})
 
 
-@websocket_api.require_admin
 @websocket_api.websocket_command({
     vol.Required("type"): f"{DOMAIN}/history",
     vol.Optional("door_ids"): [str],
@@ -130,6 +163,8 @@ async def ws_doors(hass, connection, msg):
 })
 @websocket_api.async_response
 async def ws_history(hass, connection, msg):
+    if not _staff(connection):
+        return _deny(connection, msg)
     archive = hass.data.get(ARCHIVE_KEY)
     if archive is None:
         connection.send_error(msg["id"], "not_ready", "Toegangsarchief is nog niet geladen")
@@ -146,8 +181,15 @@ async def ws_history(hass, connection, msg):
     except ValueError as e:
         connection.send_error(msg["id"], "invalid_format", f"ongeldige datum: {e}")
         return
+    medew = not _admin(connection)
+    if medew:
+        # medewerker: enkel de laatste 24 uur, zonder foto's (keuze Matthias 30/10/2026)
+        cut = int(time.time()) - MEDEWERKER_LOG_S
+        kw["start"] = max(kw.get("start") or 0, cut)
+        if kw.get("end") is not None and kw["end"] < cut:
+            kw["end"] = cut
     t0 = time.monotonic()
-    photos = hass.data.get(f"{DOMAIN}_photos")
+    photos = None if medew else hass.data.get(f"{DOMAIN}_photos")
 
     def _q():
         r = archive.query(tz, **kw)
@@ -158,6 +200,11 @@ async def ws_history(hass, connection, msg):
     res = await hass.async_add_executor_job(_q)
     _remote_users(hass, res["rows"])
     res["query_ms"] = int((time.monotonic() - t0) * 1000)
+    if medew:
+        for r in res.get("rows", []):
+            r.pop("photo", None)
+            r.pop("card", None)
+        res["limited_hours"] = 24
     connection.send_result(msg["id"], res)
 
 
@@ -181,11 +228,12 @@ def _remote_users(hass, rows):
                 r["method"] = f"op afstand door {hits[0][1]}"
 
 
-@websocket_api.require_admin
 @websocket_api.websocket_command({vol.Required("type"): f"{DOMAIN}/codes"})
 @callback
 def ws_codes(hass, connection, msg):
-    """Codes en badges per persoon over alle deuren heen (enkel voor beheerders)."""
+    """Codes en badges per persoon over alle deuren heen (beheerders; medewerkers zonder badges)."""
+    if not _staff(connection):
+        return _deny(connection, msg)
     coords = _coords(hass)
     people = {}
     for did, c in coords.items():
@@ -196,14 +244,17 @@ def ws_codes(hass, connection, msg):
             n = (r.get("CardName") or r.get("UserID") or "").strip() or "?"
             people.setdefault(n.lower(), {"name": n, "codes": {}, "cards": {}})["cards"].setdefault(did, []).append(r.get("CardNo", ""))
     doors = [{"id": did, "name": c.door_name} for did, c in sorted(coords.items(), key=lambda x: x[1].door_name.lower())]
+    if not _admin(connection):
+        people = {k: {**p, "cards": {}} for k, p in people.items() if p["codes"]}
     connection.send_result(msg["id"], {"doors": doors, "people": sorted(people.values(), key=lambda p: p["name"].lower())})
 
 
-@websocket_api.require_admin
 @websocket_api.websocket_command({vol.Required("type"): f"{DOMAIN}/manage/list"})
 @websocket_api.async_response
 async def ws_manage_list(hass, connection, msg):
-    """Alle codes en badges met status, plus de recentste wijzigingen (enkel voor beheerders)."""
+    """Alle codes en badges met status, plus de recentste wijzigingen (superadmin en admin)."""
+    if not _admin(connection):
+        return _deny(connection, msg)
     from .manage import MANAGER_KEY
     from .registry import secret
     coords = _coords(hass)
@@ -260,7 +311,6 @@ ACTIONS = {
 }
 
 
-@websocket_api.require_admin
 @websocket_api.websocket_command({
     vol.Required("type"): f"{DOMAIN}/manage/action",
     vol.Required("action"): vol.In(list(ACTIONS)),
@@ -277,13 +327,20 @@ ACTIONS = {
 async def ws_manage_action(hass, connection, msg):
     """Voert een beheeractie uit via de gewone services (zelfde controles, logboek met de gebruiker)."""
     from homeassistant.exceptions import HomeAssistantError
+    if not _admin(connection):
+        return _deny(connection, msg)
     service, fields, response = ACTIONS[msg["action"]]
     src = {**msg, "id": msg.get("entry")}
     data = {k: src[k] for k in fields if k in src and src[k] not in (None, "")}
     try:
-        res = await hass.services.async_call(
-            DOMAIN, service, data, blocking=True, context=connection.context(msg), return_response=response
-        )
+        if connection.user.is_admin:
+            res = await hass.services.async_call(
+                DOMAIN, service, data, blocking=True, context=connection.context(msg), return_response=response
+            )
+        else:
+            # rol Admin (geen HA-beheerder): de services zijn enkel voor HA-beheerders, dus rechtstreeks de
+            # actie uitvoeren met dezelfde validatie (schema van de service) en dezelfde gebruiker in het logboek
+            res = await _role_call(hass, service, data, connection.context(msg))
     except (HomeAssistantError, vol.Invalid) as e:
         connection.send_error(msg["id"], "failed", str(e))
         return
@@ -320,8 +377,8 @@ def _own_codes(mgr, uid):
 
 
 @websocket_api.websocket_command({vol.Required("type"): f"{DOMAIN}/user/codes"})
-@callback
-def ws_user_codes(hass, connection, msg):
+@websocket_api.async_response
+async def ws_user_codes(hass, connection, msg):
     """Eigen tijdelijke codes (ook voor gebruikers zonder beheerrechten); uit dienst enkel de laatste 7 dagen."""
     from .manage import MANAGER_KEY
     mgr = hass.data.get(MANAGER_KEY)
@@ -329,15 +386,25 @@ def ws_user_codes(hass, connection, msg):
     names = {did: c.door_name for did, c in coords.items()}
     recent = (dt_util.now() - timedelta(days=7)).isoformat()
     entries = []
+    medew = _staff(connection)
     if mgr is not None and connection.user:
-        for cid, m in _own_codes(mgr, connection.user.id):
+        # medewerker: alle codes (ook die van anderen), met de code zelf; geen badges
+        rows = ([(cid, m) for cid, m in mgr.reg.managed.items() if m.get("kind") == "code"] if medew
+                else _own_codes(mgr, connection.user.id))
+        for cid, m in rows:
             if m["status"] == "retired" and (m.get("updated") or "") < recent:
                 continue
-            entries.append(_entry_out(cid, m, names))
-    entries.sort(key=lambda e: (e["status"] == "retired", e.get("valid_until") or "", e["name"].lower()))
+            e = _entry_out(cid, m, names)
+            if medew and m.get("owner"):
+                u = await hass.auth.async_get_user(m["owner"])
+                e["owner_name"] = u.name if u and u.name else None
+            entries.append(e)
+    entries.sort(key=lambda e: (e["status"] == "retired", e.get("valid_until") or "9999", e["name"].lower()))
     doors = [{"id": did, "name": c.door_name} for did, c in sorted(coords.items(), key=lambda x: x[1].door_name.lower())]
+    limits = ({"active": None, "days": MEDEWERKER_MAX_DAYS, "ahead_days": MEDEWERKER_MAX_DAYS} if medew
+              else {"active": USER_MAX_ACTIVE, "days": USER_MAX_DAYS, "ahead_days": USER_MAX_AHEAD_DAYS})
     connection.send_result(msg["id"], {"doors": doors, "entries": entries, "audit": [], "unknown_cards": [], "admin": _admin(connection),
-                                       "limits": {"active": USER_MAX_ACTIVE, "days": USER_MAX_DAYS, "ahead_days": USER_MAX_AHEAD_DAYS}})
+                                       "staff": medew, "limits": limits})
 
 
 def _local_span(end, start):
@@ -379,16 +446,19 @@ async def ws_user_add(hass, connection, msg):
         return
     now = dt_util.utcnow()
     start = max(now, vfrom) if vfrom else now
+    medew = _staff(connection)
+    max_days = MEDEWERKER_MAX_DAYS if medew else USER_MAX_DAYS
+    max_ahead = MEDEWERKER_MAX_DAYS if medew else USER_MAX_AHEAD_DAYS
     err = None
     if vuntil <= now:
         err = "het einde ligt in het verleden"
     elif vfrom and vuntil <= vfrom:
         err = "het einde moet na het begin liggen"
-    elif _local_span(vuntil, start) > timedelta(days=USER_MAX_DAYS, minutes=1):
-        err = f"een tijdelijke code is maximaal {USER_MAX_DAYS} dagen geldig"
-    elif vfrom and vfrom - now > timedelta(days=USER_MAX_AHEAD_DAYS):
-        err = f"het begin mag maximaal {USER_MAX_AHEAD_DAYS} dagen vooruit liggen"
-    elif sum(1 for _, m in _own_codes(mgr, connection.user.id) if m["status"] != "retired") >= USER_MAX_ACTIVE:
+    elif _local_span(vuntil, start) > timedelta(days=max_days, minutes=1):
+        err = f"een tijdelijke code is maximaal {max_days} dagen geldig"
+    elif vfrom and vfrom - now > timedelta(days=max_ahead):
+        err = f"het begin mag maximaal {max_ahead} dagen vooruit liggen"
+    elif not medew and sum(1 for _, m in _own_codes(mgr, connection.user.id) if m["status"] != "retired") >= USER_MAX_ACTIVE:
         err = f"je hebt al {USER_MAX_ACTIVE} actieve tijdelijke codes; stop er eerst een"
     if err:
         connection.send_error(msg["id"], "failed", err)
@@ -396,7 +466,7 @@ async def ws_user_add(hass, connection, msg):
     # eigenaar en limiet gaan mee naar het toevoegen zelf: daar worden ze onder het schrijfslot nagekeken en gezet
     # (twee gelijktijdige aanvragen kunnen de limiet zo niet samen overschrijden)
     data = {"name": msg["name"].strip(), "doors": msg["doors"], "valid_until": vuntil,
-            "owner": connection.user.id, "owner_limit": USER_MAX_ACTIVE}
+            "owner": connection.user.id, "owner_limit": None if medew else USER_MAX_ACTIVE}
     if vfrom and vfrom > now:
         data["valid_from"] = vfrom
     try:
@@ -417,7 +487,8 @@ async def ws_user_stop(hass, connection, msg):
     from .manage import MANAGER_KEY
     mgr, ops = hass.data.get(MANAGER_KEY), hass.data.get(USER_OPS_KEY)
     m = mgr.reg.managed.get(msg["entry"]) if mgr is not None else None
-    if m is None or ops is None or not connection.user or (m.get("owner") != connection.user.id and not _admin(connection)):
+    if m is None or ops is None or not connection.user or (
+            m.get("owner") != connection.user.id and not _admin(connection) and not (_staff(connection) and m.get("kind") == "code")):
         connection.send_error(msg["id"], "not_found", "onbekende code")
         return
     if m["status"] == "retired" and not m.get("doors"):
@@ -466,15 +537,54 @@ async def ws_user_days(hass, connection, msg):
 
 
 
-@websocket_api.require_admin
 @websocket_api.websocket_command({vol.Required("type"): f"{DOMAIN}/errors",
                                   vol.Optional("days", default=60): vol.All(vol.Coerce(int), vol.Range(min=1, max=60))})
 @websocket_api.async_response
 async def ws_errors(hass, connection, msg):
     """Foutenlog van de laatste 60 dagen (waarschuwingen en fouten van deze integratie), enkel beheerders."""
+    if not _admin(connection):
+        return _deny(connection, msg)
     log = hass.data.get(f"{DOMAIN}_errorlog")
     if log is None:
         connection.send_error(msg["id"], "not_ready", "foutenlog niet beschikbaar")
         return
     await hass.async_add_executor_job(log.flush_to_db)
     connection.send_result(msg["id"], await hass.async_add_executor_job(log.query, msg["days"]))
+
+
+async def _role_call(hass, service: str, data: dict, context):
+    """Service-actie uitvoeren voor een rol zonder HA-beheerrechten: zelfde schema en zelfde functie."""
+    from homeassistant.core import ServiceCall
+    ops = hass.data.get(ROLE_OPS_KEY) or {}
+    fn = ops.get(service)
+    if fn is None:
+        raise vol.Invalid(f"actie {service} niet beschikbaar")
+    svc = hass.services.async_services_internal().get(DOMAIN, {}).get(service)
+    if svc is not None and svc.schema is not None:
+        data = svc.schema(dict(data))
+    return await fn(ServiceCall(hass, DOMAIN, service, data, context))
+
+
+@websocket_api.websocket_command({vol.Required("type"): f"{DOMAIN}/me"})
+@callback
+def ws_me(hass, connection, msg):
+    """Rol van de aangemelde gebruiker: wat de kaarten mogen tonen (de controle gebeurt bij elk commando)."""
+    r = roles.role(hass, connection.user)
+    connection.send_result(msg["id"], {"user": connection.user.id if connection.user else None, "role": r,
+                                       "label": roles.LABEL.get(r, r), "admin": _admin(connection),
+                                       "staff": _staff(connection), "log_hours": None if _admin(connection) else 24})
+
+
+@websocket_api.websocket_command({vol.Required("type"): f"{DOMAIN}/door/open", vol.Required("door"): str})
+@websocket_api.async_response
+async def ws_door_open(hass, connection, msg):
+    """Deur op afstand openen: superadmin, admin en medewerker (keuze Matthias 30/10/2026); in het logboek."""
+    from homeassistant.exceptions import HomeAssistantError
+    if not _staff(connection):
+        return _deny(connection, msg)
+    try:
+        res = await _role_call(hass, "open_door", {"door": msg["door"]}, connection.context(msg))
+    except (HomeAssistantError, vol.Invalid) as e:
+        connection.send_error(msg["id"], "failed", str(e))
+        return
+    connection.send_result(msg["id"], {"ok": True, "result": res})
