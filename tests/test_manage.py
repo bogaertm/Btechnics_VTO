@@ -804,3 +804,19 @@ async def test_rollen_admin_en_medewerker(hass, devices, hass_ws_client):
     assert not (await ws(usr, type=f"{DOMAIN}/door/open", door="cafe"))["success"]
     assert not (await ws(usr, type=f"{DOMAIN}/history"))["success"]
     assert (await ws(usr, type=f"{DOMAIN}/me"))["result"]["role"] == "gebruiker"
+
+
+async def test_rollen_via_service(hass, devices):
+    """Contract voor Btechnics IOT (Work app): set_role en get_roles, enkel beheerders of het systeem."""
+    from custom_components.btechnics_vto import roles
+    await setup_two_entries(hass)
+    await hass.auth.async_create_user("Eigenaar", group_ids=["system-admin"])   # eerste gebruiker = eigenaar
+    u = await hass.auth.async_create_user("Ine", group_ids=["system-users"])
+    r = await hass.services.async_call(DOMAIN, "set_role", {"user_id": u.id, "role": "admin"}, blocking=True, return_response=True)
+    assert r["role"] == "admin" and roles.role(hass, u) == "admin"
+    await hass.services.async_call(DOMAIN, "set_role", {"user_id": u.id, "role": "medewerker"}, blocking=True)
+    lst = await hass.services.async_call(DOMAIN, "get_roles", {}, blocking=True, return_response=True)
+    assert next(x for x in lst["users"] if x["user_id"] == u.id)["role"] == "medewerker"
+    with pytest.raises(Unauthorized):
+        await hass.services.async_call(DOMAIN, "set_role", {"user_id": u.id, "role": "admin"}, blocking=True,
+                                       context=Context(user_id=u.id))

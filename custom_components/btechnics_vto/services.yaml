@@ -250,3 +250,17 @@ set_photos:
       name: Foto's aan
       required: true
       selector: { boolean: {} }
+
+set_role:
+  fields:
+    user_id:
+      required: true
+      selector:
+        text:
+    role:
+      required: true
+      selector:
+        select:
+          options: ["admin", "medewerker", "gebruiker"]
+
+get_roles:

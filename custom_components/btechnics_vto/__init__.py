@@ -1073,6 +1073,29 @@ def _register_services(hass: HomeAssistant):
     async_register_admin_service(hass, DOMAIN, "list_log", list_log, vol.Schema({
         vol.Optional("count"): vol.All(vol.Coerce(int), vol.Range(min=1, max=5000)),
         vol.Optional("raw", default=False): cv.boolean}), supports_response=SupportsResponse.ONLY)
+    # Rollen voor andere koppelingen (bv. Btechnics IOT, gebruikersbeheer vanuit de Work app): enkel HA-beheerders
+    # of het systeem zelf (geen gebruiker in de context). Superadmin = HA-beheerder, dat regelt de aanroeper zelf.
+    from . import roles as _roles
+
+    async def set_role(call: ServiceCall):
+        user = await hass.auth.async_get_user(call.data["user_id"])
+        if user is None or user.system_generated:
+            raise HomeAssistantError("onbekende gebruiker")
+        await _roles.async_set_role(hass, user.id, call.data["role"])
+        return {"user_id": user.id, "role": _roles.role(hass, user)}
+
+    async def get_roles(call: ServiceCall):
+        out = []
+        for u in await hass.auth.async_get_users():
+            if not u.system_generated:
+                out.append({"user_id": u.id, "name": u.name, "active": u.is_active, "role": _roles.role(hass, u)})
+        return {"users": out}
+
+    async_register_admin_service(hass, DOMAIN, "set_role", set_role, vol.Schema({
+        vol.Required("user_id"): cv.string,
+        vol.Required("role"): vol.In([_roles.ADMIN, _roles.MEDEWERKER, _roles.USER])}), supports_response=SupportsResponse.OPTIONAL)
+    async_register_admin_service(hass, DOMAIN, "get_roles", get_roles, supports_response=SupportsResponse.ONLY)
+
     # rollen zonder HA-beheerrechten (Admin, Medewerker; roles.py): dezelfde functies, de rol controleert websocket.py
     from .websocket import ROLE_OPS_KEY
     hass.data[ROLE_OPS_KEY] = {
