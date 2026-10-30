@@ -739,3 +739,81 @@ async def test_fotos_per_deur_uit(hass, devices):
     assert reg(hass).photos_off == ["kammerstraat"] and reg(hass).audit[-1]["action"] == "foto's uit"
     await call(hass, "set_photos", {"door": "kammerstraat", "enabled": True})
     assert reg(hass).photos_off == []
+
+
+async def _token(hass, name):
+    u = await hass.auth.async_create_user(name, group_ids=["system-users"])
+    rt = await hass.auth.async_create_refresh_token(u, "https://example.com/app")
+    return u, hass.auth.async_create_access_token(rt)
+
+
+async def test_rollen_admin_en_medewerker(hass, devices, hass_ws_client):
+    """Rollen (v0.12.0): admin = alles behalve HA-instellingen; medewerker = codes, deur, logboek 24 u zonder foto's."""
+    from custom_components.btechnics_vto import roles
+    cafe, _ = devices
+    now = int(dt_util.now().timestamp())
+    cafe.add_log(now - 60, name="Roijin")
+    cafe.add_log(now - 3 * 86400, name="Oud")
+    await setup_two_entries(hass)
+    await hass.async_block_till_done()
+    adm_u, adm_t = await _token(hass, "Ine")
+    med_u, med_t = await _token(hass, "Arne")
+    _, usr_t = await _token(hass, "Gast")
+    # zoals Btechnics IOT (v1.49.0) ze laadt: enkel lezen in deze koppeling
+    hass.data[roles.KEY] = {"admin": [adm_u.id], "medewerker": [med_u.id], "dashboards": {}}
+
+    async def ws(c, **kw):
+        await c.send_json_auto_id(kw)
+        return await c.receive_json()
+
+    med = await hass_ws_client(hass, med_t)
+    me = (await ws(med, type=f"{DOMAIN}/me"))["result"]
+    assert me["role"] == "medewerker" and me["staff"] and not me["admin"]
+    # logboek: enkel laatste 24 uur, zonder foto of badgenummer
+    h = (await ws(med, type=f"{DOMAIN}/history", days=30))["result"]
+    names = [r["name"] for r in h["rows"]]
+    assert "Roijin" in names and "Oud" not in names and h["limited_hours"] == 24
+    assert all("photo" not in r and "card" not in r for r in h["rows"])
+    # alles wat enkel voor admin is
+    for t in ("manage/list", "errors"):
+        assert not (await ws(med, type=f"{DOMAIN}/{t}"))["success"], t
+    assert not (await ws(med, type=f"{DOMAIN}/manage/action", action="add", name="X", code="445566", doors=["cafe"]))["success"]
+    # alle codes zien (met code), aanmaken (langer dan 7 dagen) en andermans code stoppen
+    lst = (await ws(med, type=f"{DOMAIN}/user/codes"))["result"]
+    adr = next(e for e in lst["entries"] if e["name"] == "Adriaan")
+    assert adr["secret"] and lst["staff"] is True and lst["limits"]["active"] is None
+    loc = lambda d: (dt_util.now() + d).strftime("%Y-%m-%dT%H:%M:%S")      # noqa: E731
+    r = await ws(med, type=f"{DOMAIN}/user/add", name="Artiest", doors=["cafe"], valid_until=loc(timedelta(days=30)))
+    assert r["success"], r
+    assert (await ws(med, type=f"{DOMAIN}/user/stop", entry=adr["id"]))["success"]
+    assert reg(hass).managed[adr["id"]]["status"] == "retired"
+    # deur openen, met de naam in het logboek
+    assert (await ws(med, type=f"{DOMAIN}/door/open", door="cafe"))["success"]
+    assert reg(hass).audit[-1]["action"] == "deur geopend op afstand" and reg(hass).audit[-1]["user"] == "Arne"
+
+    # admin zonder HA-beheerrechten: volledig beheer via de websocket
+    adm = await hass_ws_client(hass, adm_t)
+    assert (await ws(adm, type=f"{DOMAIN}/manage/list"))["success"]
+    r = await ws(adm, type=f"{DOMAIN}/manage/action", action="add", name="Leverancier", code="771133", doors=["cafe"])
+    assert r["success"], r
+    assert reg(hass).audit[-1]["user"] == "Ine"
+    h = (await ws(adm, type=f"{DOMAIN}/history", days=30))["result"]
+    assert "Oud" in [r["name"] for r in h["rows"]] and "limited_hours" not in h
+
+    # gebruiker zonder rol: geen deur, geen logboek
+    usr = await hass_ws_client(hass, usr_t)
+    assert not (await ws(usr, type=f"{DOMAIN}/door/open", door="cafe"))["success"]
+    assert not (await ws(usr, type=f"{DOMAIN}/history"))["success"]
+    assert (await ws(usr, type=f"{DOMAIN}/me"))["result"]["role"] == "gebruiker"
+
+
+async def test_rollen_zonder_btechnics_iot(hass, devices, hass_ws_client):
+    """Oudere Btechnics IOT (geen hass.data["btechnics_roles"]): iedereen behalve beheerders is gebruiker."""
+    from custom_components.btechnics_vto import roles
+    await setup_two_entries(hass)
+    hass.data.pop(roles.KEY, None)
+    u, t = await _token(hass, "Arne")
+    c = await hass_ws_client(hass, t)
+    await c.send_json_auto_id({"type": f"{DOMAIN}/me"})
+    assert (await c.receive_json())["result"]["role"] == "gebruiker"
+    assert not hass.services.has_service(DOMAIN, "set_role")

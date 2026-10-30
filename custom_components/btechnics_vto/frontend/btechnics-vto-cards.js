@@ -66,8 +66,37 @@ async function photoSrc(hass, id) {
   PHOTO_SRC.set(id, { path: r.path, until: Date.now() + 3000 * 1000 });
   return r.path;
 }
+/* Rollen (v0.12.0): superadmin = HA-beheerder, admin en medewerker via de instellingen van de koppeling.
+   De kaarten vragen de rol één keer op; Home Assistant controleert ze opnieuw bij elk commando. */
+let VTO_ME = null, VTO_ME_P = null;
+// de rol kan in de Work-app wijzigen (Btechnics IOT): na 5 minuten opnieuw opvragen, de kaarten tonen
+// de nieuwe rol bij de volgende update van hass
+let VTO_ME_AT = 0;
+function meFor(hass, fresh) {
+  const ok = VTO_ME && hass && hass.user && VTO_ME.user === hass.user.id;
+  if (ok && !fresh && Date.now() - VTO_ME_AT > 300000 && !VTO_ME_P) loadMe(hass, true);
+  return ok ? VTO_ME : null;
+}
+function loadMe(hass, force) {
+  if (!force && meFor(hass, true)) return Promise.resolve(VTO_ME);
+  if (!VTO_ME_P) {
+    VTO_ME_P = hass.callWS({ type: "btechnics_vto/me" })
+      .catch(() => ({ user: hass.user.id, admin: !!hass.user.is_admin, staff: !!hass.user.is_admin }))
+      .then((r) => { VTO_ME = r; VTO_ME_AT = Date.now(); VTO_ME_P = null; return r; });
+  }
+  return VTO_ME_P;
+}
 function isAdmin(hass) {
-  return !!(hass && hass.user && hass.user.is_admin);
+  const me = meFor(hass);
+  return me ? !!me.admin : !!(hass && hass.user && hass.user.is_admin);
+}
+// medewerker of hoger: codes, deur openen, logboek van 24 uur
+function isStaff(hass) {
+  const me = meFor(hass);
+  return me ? !!me.staff : isAdmin(hass);
+}
+function isMedewerker(hass) {
+  return isStaff(hass) && !isAdmin(hass);
 }
 // icoon per methode (volledige tekst in de tooltip)
 function methodIcon(m) {
@@ -249,7 +278,8 @@ class VtoBase extends HTMLElement {
     // de rol (beheerder of niet) bepaalt wat de kaart toont: wachten tot de gebruiker gekend is,
     // en opnieuw opbouwen als de rol verandert
     if (!hass.user) return;
-    const adm = isAdmin(hass);
+    if (!meFor(hass)) { loadMe(hass).then(() => { if (this._hass) this.hass = this._hass; }); return; }
+    const adm = `${isAdmin(hass)}|${isStaff(hass)}`;
     if (this._role === undefined || this._role !== adm) {
       this._role = adm;
       clearInterval(this._timer);
@@ -379,7 +409,7 @@ class VtoOverzicht extends VtoBase {
       ha-card.user .last, ha-card.user table.recent, ha-card.user .stats .stat:nth-child(n+3) { display: none; }
       ha-card.user .stats { grid-template-columns: 1fr 1fr; }
       ha-card.m button.tohist { display: block; order: 8; background: none; border: 0; color: var(--primary-color); font: inherit; padding: 6px 0; min-height: 44px; cursor: pointer; }
-    </style><ha-card class="${isAdmin(this._hass) ? "" : "user"}"><div class="title">${esc(this._config.title || "Deuren")}</div><div id="body" class="muted">Laden...</div><div id="foot" class="foot"></div>
+    </style><ha-card class="${isStaff(this._hass) ? "" : "user"}"><div class="title">${esc(this._config.title || "Deuren")}</div><div id="body" class="muted">Laden...</div><div id="foot" class="foot"></div>
       ${FAB}<div class="fabspace monly"></div></ha-card>`;
     const fab = this.shadowRoot.getElementById("fab");
     if (fab) fab.addEventListener("click", () => goView(this._config.codes_view || "codes", { quick: 1 }));
@@ -478,10 +508,10 @@ class VtoOverzicht extends VtoBase {
       <div class="stats">
         <div class="stat"><div class="v">${d.today.opened}</div><div class="l">Vandaag geopend</div></div>
         <div class="stat"><div class="v">${d.today.refused}</div><div class="l">Vandaag geweigerd</div></div>
-        <div class="stat"><div class="v">${d.codes}</div><div class="l">Codes</div></div>
-        <div class="stat"><div class="v">${d.cards}</div><div class="l">Badges</div></div>
+        <div class="stat"><div class="v">${d.codes ?? ""}</div><div class="l">Codes</div></div>
+        <div class="stat"><div class="v">${d.cards ?? ""}</div><div class="l">Badges</div></div>
       </div>
-      ${isAdmin(this._hass) ? `<div class="opener"><button class="btn" data-open="${esc(d.id)}" data-name="${esc(d.name)}" ${d.available ? "" : "disabled"}>
+      ${isStaff(this._hass) ? `<div class="opener"><button class="btn" data-open="${esc(d.id)}" data-name="${esc(d.name)}" ${d.available ? "" : "disabled"}>
         <ha-icon icon="mdi:door-open" style="--mdc-icon-size:18px"></ha-icon> Deur openen</button><span class="omsg" data-omsg="${esc(d.id)}"></span></div>` : ""}
       <button class="tohist" data-tohist="${esc(d.id)}">Alles van ${esc(d.name)} in Historiek &rsaquo;</button>
       <table class="recent"><colgroup><col class="c1"><col class="c2"><col class="c3"><col class="c4">${admin ? '<col class="c5">' : ""}</colgroup>${recent}</table>
@@ -504,7 +534,8 @@ class VtoOverzicht extends VtoBase {
     msg.className = "omsg"; msg.textContent = "Bezig...";
     this._busyOpen = true;
     try {
-      await this._hass.callService("btechnics_vto", "open_door", { door: b.dataset.open });
+      // via de koppeling (rol nagekeken: superadmin, admin of medewerker), niet de service (enkel HA-beheerders)
+      await this._ws({ type: "btechnics_vto/door/open", door: b.dataset.open });
       msg.className = "omsg ok"; msg.textContent = `${b.dataset.name} is geopend.`;
     } catch (e) {
       msg.className = "omsg error"; msg.textContent = `Niet gelukt: ${errText(e)}`;
@@ -539,7 +570,7 @@ class VtoToegang extends VtoBase {
     if (fs) fs.classList.remove("on");
   }
   _init() {
-    if (!isAdmin(this._hass)) return this._initUser();
+    if (!isStaff(this._hass)) return this._initUser();
     const c = this._config;
     this._state = {
       search: "", person: null, door: "", status: "all",
@@ -631,6 +662,7 @@ class VtoToegang extends VtoBase {
       ${isAdmin(this._hass) ? `${FAB}<div class="fabspace monly"></div>` : ""}
     </ha-card>`;
     const $ = (id) => this.shadowRoot.getElementById(id);
+    if (isMedewerker(this._hass)) $("info").insertAdjacentHTML("beforebegin", `<div class="muted" style="margin:8px 0">Als medewerker zie je de toegangen van de laatste 24 uur, zonder foto's.</div>`);
     const it = takeIntent(c.view || "historiek");
     if (it && it.door) this._state.door = it.door;
     if ($("fab")) $("fab").addEventListener("click", () => goView(c.codes_view || "codes", { quick: 1 }));
@@ -1138,6 +1170,8 @@ class VtoCodes extends VtoBase {
   _init() {
     // gebruiker zonder beheerrechten: enkel eigen tijdelijke codes maken, delen en stoppen
     this._userMode = !isAdmin(this._hass);
+    // medewerker: alle codes zien (ook de code zelf), aanmaken en stoppen; geen badges of andere acties
+    this._staffMode = this._userMode && isStaff(this._hass);
     this._show = false;
     this._revealed = new Set(); // codes die met een klik zichtbaar gemaakt zijn
     this._q = "";
@@ -1221,8 +1255,9 @@ class VtoCodes extends VtoBase {
       .uinfo { font-size: 0.85rem; color: var(--secondary-text-color); margin: -4px 0 12px; }
     </style>
     <ha-card class="${this._userMode ? "user" : ""}">
-      <div class="title">${esc(this._config.title || (this._userMode ? "Tijdelijke codes" : "Codes en badges"))}</div>
-      ${this._userMode ? `<div class="uinfo">Je ziet hier enkel de tijdelijke codes die jij maakte. Home Assistant kiest de code; maximaal 7 dagen geldig en maximaal 10 tegelijk actief.</div>` : ""}
+      <div class="title">${esc(this._config.title || (this._staffMode ? "Codes" : this._userMode ? "Tijdelijke codes" : "Codes en badges"))}</div>
+      ${this._staffMode ? `<div class="uinfo">Als medewerker zie je alle codes. Je kan codes aanmaken en stoppen. Home Assistant kiest de code.</div>`
+        : this._userMode ? `<div class="uinfo">Je ziet hier enkel de tijdelijke codes die jij maakte. Home Assistant kiest de code; maximaal 7 dagen geldig en maximaal 10 tegelijk actief.</div>` : ""}
       <div class="bar">
         <input id="q" type="search" placeholder="Zoek persoon, code of badgenummer" autocomplete="off">
         <select id="kind" class="donly"><option value="all">Codes en badges</option><option value="code">Codes</option><option value="badge">Badges</option></select>
@@ -1342,7 +1377,7 @@ class VtoCodes extends VtoBase {
     this._form = { type: "sheet", entry: e };
     const doors = (e.doors.length ? e.doors : e.stored).map((d) => d.name);
     const shown = this._show || this._revealed.has(e.id);
-    const secret = this._userMode ? `<div class="bigcode" style="cursor:default"><span class="hidden">&bull;&bull;&bull;&bull;&bull;&bull;</span><small>tik op Delen om de code te zien</small></div>`
+    const secret = this._userMode && !this._staffMode ? `<div class="bigcode" style="cursor:default"><span class="hidden">&bull;&bull;&bull;&bull;&bull;&bull;</span><small>tik op Delen om de code te zien</small></div>`
       : e.kind === "badge" ? `<div class="bigcode" style="cursor:default"><span class="mono">${esc(e.secret)}</span><small>badgenummer</small></div>`
       : `<button class="bigcode" data-reveal="${esc(e.id)}">${shown ? `<span class="mono">${esc(e.secret)}</span><small>tik om te verbergen</small>` : `<span class="hidden">&bull;&bull;&bull;&bull;&bull;&bull;</span><small>tik om de code te tonen</small>`}</button>`;
     const a = (act, icon, label, cls) => `<button class="act ${cls || ""}" data-act="${act}" data-id="${esc(e.id)}"><ha-icon icon="${icon}"></ha-icon>${label}</button>`;
@@ -1464,8 +1499,8 @@ class VtoCodes extends VtoBase {
     const q = this._q;
     const list = entries.filter((e) => (this._status === "all" || (this._status === "temp" ? temp(e) : e.status === this._status))
       && (this._kind === "all" || e.kind === this._kind)
-      && (!q || e.name.toLowerCase().includes(q) || (!this._userMode && String(e.secret).toLowerCase().includes(q))));
-    const sec = (e) => this._userMode ? `<span class="hidden" title="Delen toont de code">&bull;&bull;&bull;&bull;&bull;&bull;</span>`
+      && (!q || e.name.toLowerCase().includes(q) || ((!this._userMode || this._staffMode) && String(e.secret).toLowerCase().includes(q))));
+    const sec = (e) => this._userMode && !this._staffMode ? `<span class="hidden" title="Delen toont de code">&bull;&bull;&bull;&bull;&bull;&bull;</span>`
       : e.kind === "badge"
       ? `<span class="mono">${esc(e.secret)}</span>`
       : this._show ? `<span class="mono">${esc(e.secret)}</span>`
@@ -1657,8 +1692,9 @@ class VtoCodes extends VtoBase {
       if (!vu) return this._message("Kies tot wanneer de code geldig is.");
       if (vu <= this._localInput(Date.now()) + ":00") return this._message("Het einde ligt in het verleden.");
       if (vf && vu <= vf) return this._message("Het einde moet na het begin liggen.");
-      if (this._userMode && this._localToMs(vu) - Math.max(Date.now(), vf ? this._localToMs(vf) : 0) > 7 * 86400000 + 60000)
-        return this._message("Een tijdelijke code is maximaal 7 dagen geldig.");
+      const maxDays = (this._data && this._data.limits && this._data.limits.days) || 7;
+      if (this._userMode && this._localToMs(vu) - Math.max(Date.now(), vf ? this._localToMs(vf) : 0) > maxDays * 86400000 + 60000)
+        return this._message(`Een tijdelijke code is maximaal ${maxDays} dagen geldig.`);
       try { localStorage.setItem("btxvto_quick_doors", JSON.stringify(sel)); } catch (err) { /* niet erg */ }
       const msg = { action: "add", name, doors: sel, valid_until: vu };
       if (vf) msg.valid_from = vf;
@@ -2065,9 +2101,31 @@ const HELP_USER = {
   terms: [["Tijdelijke code", "Code van 6 cijfers met een begin en einde; na het einde werkt ze vanzelf niet meer"], ["Stoppen", "De code werkt meteen niet meer"]],
 };
 
+// handleiding voor een medewerker: codes (alle), deur openen, logboek van 24 uur
+const HELP_STAFF = {
+  hint: "bv. code maken",
+  tasks: [
+    { icon: "mdi:timer-outline", title: "Code maken en delen", sub: "Gast, technicus, artiest", tab: "codes", tabName: "Codes",
+      steps: ["Klik op <b>Tijdelijke code</b>. Op de gsm: de oranje knop rechtsonder.", "Geef een naam, bv. \"Technicus koeling\".", "Vink de deur of deuren aan.", "Kies hoe lang de code werkt (maximaal 1 jaar).", "Klik op <b>Maak code en deel</b> en kies WhatsApp, Sms, Mail of Kopieer tekst."],
+      tip: "Home Assistant kiest de code. Alles wat je doet komt met je naam in het logboek." },
+    { icon: "mdi:eye-outline", title: "Een code opzoeken", sub: "Alle codes", tab: "codes", tabName: "Codes",
+      steps: ["Open <b>Codes</b>.", "Zoek op naam of code.", "Klik op de bolletjes om de code te tonen, of op <b>Delen</b>."] },
+    { icon: "mdi:stop-circle-outline", title: "Een code stoppen", sub: "Werkt meteen niet meer", tab: "codes", tabName: "Codes",
+      steps: ["Klik bij de code op <b>Stoppen</b> (op de gsm: tik op de rij) en bevestig."] },
+    { icon: "mdi:door-open", title: "Deur op afstand openen", sub: "Twee keer klikken", tab: "overzicht", tabName: "Overzicht",
+      steps: ["Open <b>Overzicht</b>.", "Klik bij de deur op <b>Deur openen</b> en klik nog eens om te bevestigen."], tip: "Elke opening op afstand komt met je naam in het logboek." },
+    { icon: "mdi:history", title: "Wie kwam er binnen", sub: "Laatste 24 uur", tab: "historiek", tabName: "Historiek",
+      steps: ["Open <b>Historiek</b>.", "Je ziet de toegangen van de laatste 24 uur met naam, deur en manier, zonder foto's."] },
+  ],
+  topics: [
+    { title: "Aan de deur", sub: "Hoe open je", html: hpTable([["Code", "Typ <b># code #</b> op het klavier"], ["Badge", "Hou de badge tegen de lezer"]]) },
+  ],
+  terms: [["Tijdelijke code", "Code met een begin en einde; na het einde werkt ze vanzelf niet meer"], ["Stoppen", "De code werkt meteen niet meer"]],
+};
+
 class VtoHandleiding extends VtoBase {
   _init() {
-    const doc = isAdmin(this._hass) ? HELP_DOC : HELP_USER;
+    const doc = isAdmin(this._hass) ? HELP_DOC : isStaff(this._hass) ? HELP_STAFF : HELP_USER;
     this.shadowRoot.innerHTML = `<style>${BASE_CSS}${HELP_CSS}</style>
     <ha-card><div class="title">${esc(this._config.title || "Handleiding toegangscontrole")}</div><div id="hb">${helpHtml(doc)}</div></ha-card>`;
     wireHelp(this.shadowRoot.getElementById("hb"), doc, (view) => {
@@ -2087,7 +2145,7 @@ class VtoHandleiding extends VtoBase {
 // exist"). Daarom registreren we opnieuw zolang het nodig is, telkens via window.customElements
 // (het register dat NU actief is) en met een nieuwe subklasse (een constructor mag maar een keer).
 const CARD_CLASSES = [["btechnics-vto-overzicht", VtoOverzicht], ["btechnics-vto-toegang", VtoToegang], ["btechnics-vto-codes", VtoCodes], ["btechnics-vto-handleiding", VtoHandleiding]];
-const CARDS_VERSION = "0.12.2";
+const CARDS_VERSION = "0.13.0";
 const define = (name, cls) => {
   if (window.customElements.get(name)) return;
   try {

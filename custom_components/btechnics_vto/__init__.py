@@ -267,7 +267,9 @@ class PhotoView(HomeAssistantView):
     async def get(self, request, photo_id: str):
         from aiohttp import web
         user = request.get("hass_user")
-        if user is None or not user.is_admin:
+        hass = request.app[KEY_HASS]
+        from . import roles
+        if not roles.is_admin(hass, user):
             return web.Response(status=403, text="Enkel voor beheerders")
         if not photo_id.isdigit():
             return web.Response(status=404)
@@ -1069,3 +1071,10 @@ def _register_services(hass: HomeAssistant):
     async_register_admin_service(hass, DOMAIN, "list_log", list_log, vol.Schema({
         vol.Optional("count"): vol.All(vol.Coerce(int), vol.Range(min=1, max=5000)),
         vol.Optional("raw", default=False): cv.boolean}), supports_response=SupportsResponse.ONLY)
+    # rollen zonder HA-beheerrechten (Admin, Medewerker; roles.py): dezelfde functies, de rol controleert websocket.py
+    from .websocket import ROLE_OPS_KEY
+    hass.data[ROLE_OPS_KEY] = {
+        "add_code": add_code, "update_code": update_code, "remove_code": remove_code, "open_door": open_door,
+        "set_validity": set_validity, "block": block, "unblock": unblock, "retire": retire, "restore": restore,
+        "forget": forget, "rename_badge": rename_badge, "add_badge": add_badge,
+    }
