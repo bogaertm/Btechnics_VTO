@@ -25,20 +25,5 @@
       "name_exists": "Er bestaat al een deur met deze naam.",
       "host_exists": "Deze VTO (IP adres) is al toegevoegd."
     }
-  },
-  "options": {
-    "step": {
-      "init": {
-        "title": "Rollen",
-        "description": "Superadmin is elke beheerder in Home Assistant (nu: {supers}): alles, ook Instellingen en HACS. Hieronder enkel gewone gebruikers.\n\nAdmin: alle dashboards, camerabeelden en opnames, foto's van de VTO, codes en badges beheren, deur openen.\nMedewerker: alle codes zien (met de code), codes aanmaken en stopzetten, deur openen, logboek van de laatste 24 uur zonder foto's.\n\nDe rollen gelden ook voor Btechnics VIGI.",
-        "data": {
-          "admins": "Admin",
-          "medewerkers": "Medewerker"
-        }
-      }
-    },
-    "error": {
-      "both_roles": "Een gebruiker kan maar één rol hebben."
-    }
   }
 }
