@@ -7,6 +7,7 @@ import hashlib
 import json
 import ssl
 import urllib.request
+from datetime import datetime, timedelta, timezone
 
 from .const import TABLE_CARDS, TABLE_CODES, TABLE_LOG
 
@@ -165,7 +166,7 @@ class VTOClient:
 
     def read_configs(self, names) -> dict:
         """Alleen lezen: configuratietabellen opvragen (diagnose, bv. klavier en stand-by)."""
-        out = {"toestel": self.info()}
+        out = {"toestel": self.info(), "uptime": self.uptime()}
         for name in names:
             try:
                 r = self.call("configManager.getConfig", {"name": name})
@@ -178,7 +179,22 @@ class VTOClient:
     READ_ONLY_RPC = ("system.listMethod", "system.listService", "system.methodHelp", "system.methodSignature",
                      "configManager.getMemberNames", "configManager.getConfig", "configManager.getDefault",
                      "magicBox.getDeviceType", "magicBox.getSoftwareVersion", "magicBox.getProductDefinition",
-                     "magicBox.getDeviceClass", "magicBox.getSystemInfo", "magicBox.getHardwareVersion")
+                     "magicBox.getDeviceClass", "magicBox.getSystemInfo", "magicBox.getHardwareVersion",
+                     "magicBox.getUpTime", "global.getCurrentTime")
+
+    def uptime(self) -> dict:
+        """Alleen lezen: hoe lang het toestel draait (magicBox.getUpTime, Last in seconden sinds de laatste start)."""
+        try:
+            r = self.call("magicBox.getUpTime")
+        except Exception as e:  # noqa: BLE001  diagnose
+            return {"fout": str(e)[:120]}
+        p = (r.get("params") or {}).get("up") or r.get("params") or {}
+        if not r.get("result") or "Last" not in p:
+            return {"fout": f"geen: {r.get('error') or r.get('params')}"}
+        last = int(p["Last"])
+        start = datetime.now(timezone.utc) - timedelta(seconds=last)
+        return {"seconden": last, "totaal_seconden": p.get("Total"),
+                "gestart_utc": start.replace(microsecond=0).isoformat()}
 
     def read_rpc(self, calls) -> list:
         """Alleen lezen: enkel methodes uit READ_ONLY_RPC (diagnose)."""

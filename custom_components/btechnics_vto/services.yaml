@@ -184,7 +184,7 @@ camera_probe:
 
 read_config:
   name: Instellingen lezen
-  description: Diagnose. Leest configuratietabellen van de toestellen (alleen lezen), bv. om het klavier van twee deuren te vergelijken.
+  description: Diagnose. Leest configuratietabellen en de uptime (sinds wanneer het toestel draait) van de toestellen (alleen lezen), bv. om het klavier van twee deuren te vergelijken of een herstart na te gaan.
   fields:
     door:
       name: Deur
